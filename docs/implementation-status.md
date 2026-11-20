@@ -55,7 +55,7 @@ This is a repository inspection snapshot, not a claim that every listed capabili
 1. The current repository contains a Next.js 16 / React 19 / TypeScript application with PostgreSQL and Drizzle. It does not use the Vite + Express + Prisma stack named in the reference specification. The architecture blueprint records the decision to preserve the existing stack and avoid a high-risk rewrite.
 2. The repository tree reviewed on 2026-11-21 did not contain a `package-lock.json`, while the existing CI workflow and README used `npm ci`. `npm ci` requires a lockfile. The foundation branch changes CI to `npm install` so CI is not blocked by the missing file; a generated and reviewed lockfile should be committed before treating dependency resolution as reproducible.
 3. Package scripts now expose `npm test`, `npm run test:watch` and `npm run test:e2e`.
-4. The existing CI workflow has not yet been executed from this branch. No lint, type-check, build, unit-test or E2E result is claimed by this status document.
+4. GitHub Actions CI run #5 on the audited main commit completed successfully: dependency installation, lint, Next.js type generation, TypeScript type-check, Vitest unit/component tests, production build, Drizzle migration, seed and Playwright E2E all passed. This verifies only the checks and workflows currently configured; it does not establish coverage of all 30 requested modules.
 5. External integrations (Prometheus, exporters, GitHub, Docker Engine, Kubernetes, Trivy, Greenbone, Restic, SMTP and Telegram) require their own installation, credentials and network policy. They must be shown as unconfigured until a successful connection test exists.
 
 ## Immediate next work
@@ -76,7 +76,7 @@ This is a repository inspection snapshot, not a claim that every listed capabili
 | Architecture blueprint | Added on feature branch | `docs/ultimate-architecture.md` |
 | CI lockfile mismatch mitigation | Changed on feature branch | `.github/workflows/ci.yml` |
 | Test scripts | Added on feature branch | `package.json` |
-| Local dependency install | Not run | GitHub repository could not be cloned in the current execution environment |
-| Lint / type-check / build | Not run | Awaiting CI execution |
-| Unit / E2E tests | Not run | Awaiting CI execution |
+| Local dependency install | Not run | Local clone unavailable in this execution environment; CI dependency installation passed using `npm install` |
+| Lint / type-check / build | Passed in CI | [CI run #5](https://github.com/Rash499/infrapilot/actions/runs/44805892512), main commit `f15c299` |
+| Unit / component / E2E tests | Passed in CI | [CI run #5](https://github.com/Rash499/infrapilot/actions/runs/44805892512); configured suite only |
 | Production deployment | Not deployed | No deployment environment configured |
