@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Install, lint, type-check, unit tests, build
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/app_db
+      JWT_ACCESS_SECRET: ci-only-access-secret-value-0123456789abcdef
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Lint
+        run: npm run lint
+      - name: Type generation and type check
+        run: |
+          npx next typegen
+          npx tsc --noEmit
+      - name: Unit and component tests
+        run: npx vitest run
+      - name: Production build
+        run: npm run build
+
+  e2e:
+    name: End-to-end (Playwright)
+    needs: quality
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: app_db
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/app_db
+      JWT_ACCESS_SECRET: ci-only-access-secret-value-0123456789abcdef
+      SEED_PASSWORD: CiSeed-Password-2026
+      E2E_ADMIN_EMAIL: admin@infrapilot.local
+      E2E_ADMIN_PASSWORD: CiSeed-Password-2026
+      EXPOSE_RESET_TOKEN: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx drizzle-kit migrate
+      - run: npx tsx src/db/seed.ts
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - run: npx playwright test
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: playwright-report/

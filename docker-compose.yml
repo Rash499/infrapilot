@@ -1,0 +1,70 @@
+# InfraPilot local / single-host deployment.
+# Usage: cp .env.example .env  (set POSTGRES_PASSWORD and JWT_ACCESS_SECRET)  then  docker compose up -d --build
+name: infrapilot
+
+x-app-env: &app-env
+  NODE_ENV: production
+  DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-app_db}
+  JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?Set JWT_ACCESS_SECRET in .env (min 32 chars)}
+  ACCESS_TOKEN_TTL_SECONDS: ${ACCESS_TOKEN_TTL_SECONDS:-900}
+  REFRESH_TOKEN_TTL_DAYS: ${REFRESH_TOKEN_TTL_DAYS:-14}
+  APP_ORIGIN: ${APP_ORIGIN:-http://localhost:3000}
+  EXPOSE_RESET_TOKEN: ${EXPOSE_RESET_TOKEN:-false}
+  TRUST_PROXY_HEADERS: ${TRUST_PROXY_HEADERS:-false}
+  MONITOR_MAX_CONCURRENCY: ${MONITOR_MAX_CONCURRENCY:-5}
+  MONITOR_TICK_MS: ${MONITOR_TICK_MS:-5000}
+  MONITOR_RETENTION_DAYS: ${MONITOR_RETENTION_DAYS:-30}
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-app_db}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-postgres} -d $${POSTGRES_DB:-app_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      <<: *app-env
+      INFRAPILOT_EMBEDDED_WORKER: "false"
+    ports:
+      - "${APP_PORT:-3000}:3000"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
+      retries: 3
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: ["npx", "tsx", "src/workers/run.ts"]
+    depends_on:
+      app:
+        condition: service_healthy
+    environment:
+      <<: *app-env
+      INFRAPILOT_EMBEDDED_WORKER: "false"
+
+volumes:
+  pgdata:
