@@ -4,8 +4,9 @@
 
 FROM node:22-alpine AS deps
 WORKDIR /app
-COPY package.json package-lock.json ./
-RUN npm ci --no-audit --no-fund
+COPY package.json ./
+# The repository does not currently commit a lockfile; install from the declared manifest.
+RUN npm install --no-audit --no-fund
 
 FROM node:22-alpine AS build
 WORKDIR /app
