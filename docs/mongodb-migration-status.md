@@ -2,7 +2,7 @@
 
 ## Target
 
-Move InfraPilot from PostgreSQL/Drizzle to MongoDB 8.x using the official MongoDB Node.js driver. Work is isolated on `feature/mongodb-migration-implementation`; `main` is not modified.
+Move InfraPilot from PostgreSQL/Drizzle to MongoDB 8.x using the official MongoDB Node.js driver. Work is isolated on `feature/mongodb-native-migration`; `main` is not modified.
 
 The target local connection is a single-node replica set named `rs0`. The application must connect with a least-privilege account scoped to the `infrapilot` database.
 
@@ -22,7 +22,8 @@ The target local connection is a single-node replica set named `rs0`. The applic
 - Added `src/db/collections.ts` with an explicit collection-name registry, UUID document IDs, typed collection access, and a transaction helper.
 - Added `scripts/check-mongodb.ts` and `npm run db:check:mongo` to ping the configured database and verify/create indexes without dropping data.
 - Updated `/api/health` to check MongoDB connectivity.
-- Kept the PostgreSQL/Drizzle implementation in place because the current service modules still depend on it. This is an intentional intermediate stage, not a completed datastore migration.
+- Kept the PostgreSQL/Drizzle implementation in place because the current service modules and development seed still depend on it. This is an intentional intermediate stage, not a completed datastore migration.
+- Corrected `.env.example` so `authSource=infrapilot` matches the least-privilege `infrapilot_user` account created in the `infrapilot` database.
 
 ## Remaining stages
 
