@@ -55,7 +55,8 @@ export async function getMongoClient(): Promise<MongoClient> {
 }
 
 export async function getMongoDb(): Promise<Db> {
-  const [{ database }, client] = [mongoConfig(), await getMongoClient()];
+  const { database } = mongoConfig();
+  const client = await getMongoClient();
   return client.db(database);
 }
 
