@@ -11,7 +11,7 @@
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "db:seed": "tsx src/db/seed.ts",
-    "db:check:mongo": "tsx scripts/check-mongodb.ts"
+    "db:check:mongo": "tsx scripts/check-mongodb.ts",
     "db:init": "tsx src/db/init.ts"
   },
   "dependencies": {
