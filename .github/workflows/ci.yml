@@ -21,7 +21,7 @@ jobs:
         with:
           node-version: 22
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
+        run: npm install --include=dev --no-audit --no-fund
       - name: Lint
         run: npm run lint
       - name: Type generation and type check
@@ -60,7 +60,7 @@ jobs:
         with:
           node-version: 22
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
+        run: npm install --include=dev --no-audit --no-fund
       - run: npx drizzle-kit migrate
       - run: npx tsx src/db/seed.ts
       - run: npm run build
