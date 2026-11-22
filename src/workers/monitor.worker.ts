@@ -6,6 +6,12 @@ import { logger } from "@/lib/logger";
 import { sendMaintenanceReminders } from "@/services/maintenance.service";
 import { notifyRoles, notifyUsers } from "@/services/notifications.service";
 import { computeState, rollupAssetStatus, runProbe, type ServiceState } from "@/workers/probe";
+import {
+  claimDueMonitoringTargets,
+  pruneMonitoringResults,
+  recordMonitoringCheck,
+  findAssetByIdForMonitoring,
+} from "@/db/repositories/monitoring.repository";
 
 type TargetRow = typeof monitoringTargets.$inferSelect;
 
@@ -19,6 +25,10 @@ let lastPrune = 0;
  * each target is claimed once per interval and pushed into the future before its probe starts.
  */
 export async function claimDueTargets(limit: number): Promise<TargetRow[]> {
+  if (process.env.MONGODB_URI) {
+    const targets = await claimDueMonitoringTargets(limit);
+    return targets as unknown as TargetRow[];
+  }
   return db.transaction(async (tx) => {
     const due = await tx
       .select({ id: monitoringTargets.id })
@@ -42,8 +52,12 @@ async function handleTransition(target: TargetRow, next: ServiceState): Promise<
   const link = `/monitoring?target=${target.id}`;
   let ownerId: string | null = null;
   if (target.assetId) {
-    const [asset] = await db.select({ ownerId: assets.ownerId }).from(assets).where(eq(assets.id, target.assetId)).limit(1);
-    ownerId = asset?.ownerId ?? null;
+    if (process.env.MONGODB_URI) {
+      ownerId = (await findAssetByIdForMonitoring(target.assetId))?.ownerId ?? null;
+    } else {
+      const [asset] = await db.select({ ownerId: assets.ownerId }).from(assets).where(eq(assets.id, target.assetId)).limit(1);
+      ownerId = asset?.ownerId ?? null;
+    }
   }
   if (next === "unavailable") {
     await notifyRoles(
@@ -75,6 +89,24 @@ async function handleTransition(target: TargetRow, next: ServiceState): Promise<
 }
 
 async function rollupAsset(assetId: string): Promise<void> {
+  if (process.env.MONGODB_URI) {
+    const asset = await findAssetByIdForMonitoring(assetId);
+    if (!asset || asset.status === "maintenance") return;
+    const { getCollection } = await import("@/db/collections");
+    const { collections } = await import("@/db/collections");
+    type ImportedTarget = import("@/db/models/documents").MonitoringTargetDoc;
+    const col = await getCollection<ImportedTarget>(collections.monitoringTargets);
+    const states = await col.find({ assetId, enabled: true }, { projection: { _id: 0, status: 1 } }).toArray();
+    if (states.length === 0) return;
+    const next = rollupAssetStatus(states.map((state) => state.status));
+    if (next !== asset.status) {
+      await (await getCollection<import("@/db/models/documents").AssetDoc>(collections.assets)).updateOne(
+        { id: assetId },
+        { $set: { status: next, updatedAt: new Date() } },
+      );
+    }
+    return;
+  }
   const [asset] = await db.select({ status: assets.status }).from(assets).where(eq(assets.id, assetId)).limit(1);
   if (!asset || asset.status === "maintenance") return;
   const states = await db
@@ -106,28 +138,49 @@ export async function executeCheck(target: TargetRow): Promise<void> {
     { failureThreshold: env.MONITOR_FAILURE_THRESHOLD, degradedThresholdMs: target.degradedThresholdMs },
   );
   const now = new Date();
-  await db.transaction(async (tx) => {
-    await tx.insert(monitoringResults).values({
-      targetId: target.id,
-      checkedAt: now,
-      success: result.success,
-      state: next.status,
-      responseTimeMs: result.responseTimeMs,
-      statusCode: result.statusCode,
-      errorMessage: result.errorMessage,
-    });
-    await tx
-      .update(monitoringTargets)
-      .set({
+  if (process.env.MONGODB_URI) {
+    await recordMonitoringCheck(
+      target.id,
+      {
+        checkedAt: now,
+        success: result.success,
+        state: next.status,
+        responseTimeMs: result.responseTimeMs,
+        statusCode: result.statusCode,
+        errorMessage: result.errorMessage,
+      },
+      {
         status: next.status,
         consecutiveFailures: next.consecutiveFailures,
         lastCheckedAt: now,
         lastResponseMs: result.responseTimeMs,
         lastError: result.errorMessage,
-        updatedAt: now,
-      })
-      .where(eq(monitoringTargets.id, target.id));
-  });
+      },
+    );
+  } else {
+    await db.transaction(async (tx) => {
+      await tx.insert(monitoringResults).values({
+        targetId: target.id,
+        checkedAt: now,
+        success: result.success,
+        state: next.status,
+        responseTimeMs: result.responseTimeMs,
+        statusCode: result.statusCode,
+        errorMessage: result.errorMessage,
+      });
+      await tx
+        .update(monitoringTargets)
+        .set({
+          status: next.status,
+          consecutiveFailures: next.consecutiveFailures,
+          lastCheckedAt: now,
+          lastResponseMs: result.responseTimeMs,
+          lastError: result.errorMessage,
+          updatedAt: now,
+        })
+        .where(eq(monitoringTargets.id, target.id));
+    });
+  }
   await handleTransition(target, next.status);
   if (target.assetId) await rollupAsset(target.assetId);
 }
@@ -146,6 +199,10 @@ async function runWithConcurrency<T>(items: T[], limit: number, worker: (item: T
 
 async function pruneResults(): Promise<void> {
   const cutoff = new Date(Date.now() - getEnv().MONITOR_RETENTION_DAYS * 24 * HOUR_MS);
+  if (process.env.MONGODB_URI) {
+    await pruneMonitoringResults(cutoff);
+    return;
+  }
   await db.delete(monitoringResults).where(lt(monitoringResults.checkedAt, cutoff));
 }
 
