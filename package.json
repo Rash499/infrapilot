@@ -1,12 +1,17 @@
 {
-  "name": "nextjs-postgresql-template",
+  "name": "infrapilot",
   "private": true,
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "db:check:mongo": "tsx scripts/check-mongodb.ts",
+    "db:init": "tsx src/db/init.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^7.0.7",
