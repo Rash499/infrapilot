@@ -1,5 +1,3 @@
-import { sql } from "drizzle-orm";
-import { db } from "@/db";
 import { getEnv } from "@/lib/env";
 
 export const dynamic = "force-dynamic";
@@ -9,22 +7,15 @@ type DependencyState = "ok" | "unavailable" | "invalid";
 /**
  * Readiness probe. Every API handler depends on all of these:
  * - configuration: the validated environment (details are never exposed here)
- * - postgresql: the active datastore for every service module
- * - mongodb: staged migration target, only probed when MONGODB_URI is configured
+ * - mongodb: active datastore when MONGODB_URI is configured
+ * - postgresql: compatibility datastore for unmigrated modules
  */
 export async function GET() {
-  const dependencies: Record<string, DependencyState> = { configuration: "invalid", postgresql: "unavailable" };
+  const dependencies: Record<string, DependencyState> = { configuration: "invalid" };
 
   try {
     getEnv();
     dependencies.configuration = "ok";
-  } catch {
-    return Response.json({ ok: false, dependencies }, { status: 503 });
-  }
-
-  try {
-    await db.execute(sql`select 1`);
-    dependencies.postgresql = "ok";
   } catch {
     return Response.json({ ok: false, dependencies }, { status: 503 });
   }
@@ -37,6 +28,17 @@ export async function GET() {
       dependencies.mongodb = "ok";
     } catch {
       dependencies.mongodb = "unavailable";
+      return Response.json({ ok: false, dependencies }, { status: 503 });
+    }
+  } else {
+    dependencies.postgresql = "unavailable";
+    try {
+      const { sql } = await import("drizzle-orm");
+      const { db } = await import("@/db");
+      await db.execute(sql`select 1`);
+      dependencies.postgresql = "ok";
+    } catch {
+      return Response.json({ ok: false, dependencies }, { status: 503 });
     }
   }
 
