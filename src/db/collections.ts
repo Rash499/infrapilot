@@ -49,6 +49,12 @@ export function newDocumentId(): string {
   return randomUUID();
 }
 
+/** Generate matching `_id` and `id` UUID fields for collections indexed on `{ id: 1 }`. */
+export function newEntityIds(): { _id: string; id: string } {
+  const id = newDocumentId();
+  return { _id: id, id };
+}
+
 /**
  * Run a multi-document operation atomically.
  * Requires MongoDB to run as a replica set (the local development set is rs0).
