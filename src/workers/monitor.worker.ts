@@ -38,7 +38,8 @@ export async function claimDueTargets(limit: number): Promise<TargetRow[]> {
 
 async function handleTransition(target: TargetRow, next: ServiceState): Promise<void> {
   if (next === target.status) return;
-  const link = `/monitoring/${target.id}`;
+  // The monitoring console opens a check from the `target` query parameter; there is no /monitoring/[id] route.
+  const link = `/monitoring?target=${target.id}`;
   let ownerId: string | null = null;
   if (target.assetId) {
     const [asset] = await db.select({ ownerId: assets.ownerId }).from(assets).where(eq(assets.id, target.assetId)).limit(1);

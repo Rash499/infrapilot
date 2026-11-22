@@ -61,6 +61,9 @@ function assertSameOrigin(req: Request): void {
   if (req.method === "GET" || req.method === "HEAD") return;
   const origin = req.headers.get("origin");
   if (!origin) return;
+  // Browsers state how the initiator relates to the target and forbid scripts from setting this header,
+  // so "same-origin" stays trustworthy even behind a proxy that rewrites the Host header.
+  if (req.headers.get("sec-fetch-site") === "same-origin") return;
   const allowed = getEnv().APP_ORIGIN;
   // Behind a proxy the internal request URL may differ from the public host, so compare with the host the browser used.
   const publicHost = req.headers.get("x-forwarded-host") ?? req.headers.get("host");
