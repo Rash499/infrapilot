@@ -119,3 +119,4 @@ export async function initializeAppDatabase(): Promise<{
 }
 
 export const appDbCollectionNames = COLLECTIONS;
+export const appDbIndexes = INDEXES;
