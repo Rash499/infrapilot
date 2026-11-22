@@ -1,9 +1,7 @@
-import { eq } from "drizzle-orm";
-import { db } from "@/db";
-import { users } from "@/db/schema";
 import { errors } from "@/lib/http";
 import { verifyAccessToken } from "@/lib/security";
 import { getEnv } from "@/lib/env";
+import { findUserById } from "@/db/repositories/users.repository";
 
 export type Role = "admin" | "operator" | "viewer";
 
@@ -31,11 +29,19 @@ export async function requireUser(req: Request): Promise<AuthUser> {
   if (!match) throw errors.unauthorized();
   const claims = await verifyAccessToken(match[1]!.trim());
   if (!claims) throw errors.unauthorized("Your session is invalid or has expired");
-  const [row] = await db
-    .select({ id: users.id, email: users.email, name: users.name, role: users.role, isActive: users.isActive })
-    .from(users)
-    .where(eq(users.id, claims.sub))
-    .limit(1);
+  const row = process.env.MONGODB_URI
+    ? await findUserById(claims.sub)
+    : await (async () => {
+        const { eq } = await import("drizzle-orm");
+        const { db } = await import("@/db");
+        const { users } = await import("@/db/schema");
+        const [user] = await db
+          .select({ id: users.id, email: users.email, name: users.name, role: users.role, isActive: users.isActive })
+          .from(users)
+          .where(eq(users.id, claims.sub))
+          .limit(1);
+        return user ?? null;
+      })();
   if (!row || !row.isActive) throw errors.unauthorized("Your session is invalid or has expired");
   return { id: row.id, email: row.email, name: row.name, role: row.role };
 }
