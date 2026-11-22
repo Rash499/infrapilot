@@ -7,6 +7,13 @@ import { errors, paginationMeta } from "@/lib/http";
 import { entityHistory, recordAudit } from "@/services/audit.service";
 import { diffFields, iso, likeTerm, pageOffset, userNameMap } from "@/services/common";
 import type { assetCreateSchema, assetListQuery, assetUpdateSchema } from "@/validators/schemas";
+import {
+  findAssetById,
+  getAssetRelatedData,
+  insertAsset,
+  listAssetsPaginated,
+  updateAssetById,
+} from "@/db/repositories/assets.repository";
 
 type AssetRow = typeof assets.$inferSelect;
 type CreateInput = z.infer<typeof assetCreateSchema>;
@@ -53,6 +60,24 @@ async function assertOwnerExists(ownerId: string | null | undefined): Promise<vo
 }
 
 export async function listAssets(q: ListQuery) {
+  if (process.env.MONGODB_URI) {
+    const result = await listAssetsPaginated({
+      page: q.page,
+      pageSize: q.pageSize,
+      search: q.search,
+      assetType: q.assetType,
+      environment: q.environment,
+      status: q.status,
+      archived: q.archived === "true",
+      sort: q.sort,
+      order: q.order,
+    });
+    const owners = await userNameMap(result.items.map((row) => row.ownerId));
+    return {
+      items: result.items.map((row) => toDto(row as unknown as AssetRow, row.ownerId ? owners.get(row.ownerId) ?? null : null)),
+      pagination: paginationMeta(q.page, q.pageSize, result.total),
+    };
+  }
   const conditions: SQL[] = [q.archived === "true" ? isNotNull(assets.archivedAt) : isNull(assets.archivedAt)];
   if (q.search) {
     const pattern = likeTerm(q.search);
@@ -96,6 +121,36 @@ export async function listAssets(q: ListQuery) {
 }
 
 export async function getAsset(id: string) {
+  if (process.env.MONGODB_URI) {
+    const row = await findAssetById(id);
+    if (!row) throw errors.notFound("Asset");
+    const owners = await userNameMap([row.ownerId]);
+    const related = await getAssetRelatedData(id);
+    return {
+      ...toDto(row as unknown as AssetRow, row.ownerId ? owners.get(row.ownerId) ?? null : null),
+      monitors: related.monitors.map((monitor) => ({
+        id: String(monitor.id),
+        name: String(monitor.name),
+        status: monitor.status,
+        monitorType: monitor.monitorType,
+      })),
+      findings: related.findings.map((finding) => ({
+        id: String(finding.id),
+        title: String(finding.title),
+        severity: finding.severity,
+        status: finding.status,
+        createdAt: finding.createdAt instanceof Date ? finding.createdAt.toISOString() : String(finding.createdAt),
+      })),
+      incidents: related.incidents.map((incident) => ({
+        id: String(incident.id),
+        reference: `INC-${String(incident.number).padStart(5, "0")}`,
+        title: String(incident.title),
+        severity: incident.severity,
+        status: incident.status,
+        openedAt: incident.openedAt instanceof Date ? incident.openedAt.toISOString() : String(incident.openedAt),
+      })),
+    };
+  }
   const [row] = await db.select().from(assets).where(eq(assets.id, id)).limit(1);
   if (!row) throw errors.notFound("Asset");
   const owners = await userNameMap([row.ownerId]);
@@ -150,6 +205,30 @@ export async function getAsset(id: string) {
 
 export async function createAsset(actor: AuthUser, input: CreateInput, ip: string) {
   await assertOwnerExists(input.ownerId);
+  if (process.env.MONGODB_URI) {
+    const row = await insertAsset({
+      name: input.name,
+      assetType: input.assetType,
+      hostname: input.hostname ?? null,
+      ipAddress: input.ipAddress ?? null,
+      operatingSystem: input.operatingSystem ?? null,
+      environment: input.environment,
+      location: input.location ?? null,
+      ownerId: input.ownerId,
+      description: input.description,
+      status: input.status ?? "unknown",
+      createdById: actor.id,
+    });
+    await recordAudit({
+      actorId: actor.id,
+      action: "asset.created",
+      entityType: "asset",
+      entityId: row.id,
+      summary: `Asset "${row.name}" registered (${row.assetType}, ${row.environment})`,
+      ip,
+    });
+    return getAsset(row.id);
+  }
   const [row] = await db
     .insert(assets)
     .values({
@@ -179,6 +258,37 @@ export async function createAsset(actor: AuthUser, input: CreateInput, ip: strin
 }
 
 export async function updateAsset(actor: AuthUser, id: string, input: UpdateInput, ip: string) {
+  if (process.env.MONGODB_URI) {
+    const before = await findAssetById(id);
+    if (!before) throw errors.notFound("Asset");
+    if (input.ownerId !== undefined) await assertOwnerExists(input.ownerId);
+    const { archived, ...fields } = input;
+    const patch: Parameters<typeof updateAssetById>[1] = { ...fields };
+    if (archived !== undefined) patch.archivedAt = archived ? (before.archivedAt ?? new Date()) : null;
+    const after = await updateAssetById(id, patch);
+    if (!after) throw errors.notFound("Asset");
+    const changed = diffFields(before, after, TRACKED_FIELDS);
+    if (archived !== undefined && (archived === true) !== (before.archivedAt !== null)) {
+      await recordAudit({
+        actorId: actor.id,
+        action: archived ? "asset.archived" : "asset.restored",
+        entityType: "asset",
+        entityId: id,
+        summary: archived ? `Asset "${after.name}" archived` : `Asset "${after.name}" restored`,
+        ip,
+      });
+    }
+    await recordAudit({
+      actorId: actor.id,
+      action: "asset.updated",
+      entityType: "asset",
+      entityId: id,
+      summary: changed.length ? `Updated ${changed.join(", ")}` : "Asset reviewed with no field changes",
+      metadata: { changedFields: changed },
+      ip,
+    });
+    return getAsset(id);
+  }
   const [before] = await db.select().from(assets).where(eq(assets.id, id)).limit(1);
   if (!before) throw errors.notFound("Asset");
   if (input.ownerId !== undefined) await assertOwnerExists(input.ownerId);
