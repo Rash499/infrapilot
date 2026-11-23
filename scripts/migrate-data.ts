@@ -104,6 +104,10 @@ async function main(): Promise<void> {
     console.log(`  ✓ ${step.name.padEnd(24)} ${entries.length} rows (${upserted} inserted, ${matched} already present)`);
   }
 
+  if (!dryRun) {
+    await initializeAppDatabase();
+  }
+
   console.log(`\nMigration ${dryRun ? "dry-run " : ""}complete: ${totalRows} total records across ${STEPS.length} collections.`);
 }
 

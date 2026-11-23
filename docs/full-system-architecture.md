@@ -25,8 +25,8 @@ API & Application Layer — REST API · TypeScript (/api/v1)
   ├──► Background Processing — Monitoring Worker (Scheduler · Probe Engine · State Machine · Reminders)
   │
   └──► Data Persistence Layer
-        • Current active runtime: PostgreSQL 16 + Drizzle ORM (`src/db/index.ts`, `src/db/schema.ts`)
-        • Target persistence: MongoDB 8 (`rs0` replica set, `src/db/mongo.ts`, `src/db/collections.ts`, `src/db/app_db.ts`, `src/db/models/`, `src/db/repositories/`)
+        • Supported deployment: MongoDB 8 (`rs0` replica set, `src/db/mongo.ts`, `src/db/collections.ts`, `src/db/app_db.ts`, `src/db/models/`, `src/db/repositories/`)
+        • PostgreSQL/Drizzle compatibility paths remain during the staged cutover
 ```
 
 ### Request lifecycle
@@ -54,14 +54,14 @@ API & Application Layer — REST API · TypeScript (/api/v1)
 | Validation | Zod 4 | Input & environment validation |
 | HTTP client | Axios | API communication & single-flight refresh |
 | Authentication | `jose` + Node.js `crypto` | HS256 JWT access tokens & scrypt password hashing |
-| Current runtime DB | PostgreSQL + Drizzle ORM | Active persistence during staged migration |
-| Target DB & driver | MongoDB 8 + Node.js Driver 6 | Target document persistence (`rs0` replica set) |
+| Primary DB & driver | MongoDB 8 + Node.js Driver 6 | Supported runtime and CI target (`rs0` replica set) |
+| Compatibility DB | PostgreSQL + Drizzle ORM | Legacy fallback and one-time migration support; removal remains pending |
 | Background jobs | Node.js monitoring worker | Probes, state evaluation, roll-ups & reminders |
 | Testing | Vitest, Testing Library, Playwright | Unit, component & browser E2E testing |
 | Packaging | Docker & Docker Compose | Application packaging & local orchestration |
 | CI/CD | GitHub Actions | Automated lint, typecheck, tests & build |
 
-> **Database migration distinction:** The repository contains MongoDB connection, collection, index, model, repository, and data-migration infrastructure, while operational services and the worker still execute against PostgreSQL/Drizzle during this intermediate stage.
+> **Database migration distinction:** MongoDB is the configured runtime for the supported Compose and CI paths. PostgreSQL/Drizzle fallback code and migration tooling remain in the repository and still require removal after the MongoDB workflows pass live validation.
 
 ---
 
@@ -180,15 +180,14 @@ Target database: **MongoDB 8.x**, replica set **`rs0`**, database **`infrapilot`
 
 ## 8. Deployment & CI/CD architecture
 
-- **Current verified Compose setup:** `docker-compose.yml` (PostgreSQL 16 + Next.js `app` + standalone `worker`).
-- **Target MongoDB Compose topology:** `docker-compose.mongodb.yml` (MongoDB 8.0 `rs0` replica set + `mongo-init` index bootstrap + `app` + `worker`).
+- **Supported Compose setup:** `docker-compose.yml` (MongoDB 8.0 `rs0` replica set + `mongo-init` user/index bootstrap + `app` + `worker`).
 - **CI pipeline:** `.github/workflows/ci.yml` — ESLint, TypeScript, Vitest, production build, and Playwright E2E.
 
 ---
 
 ## 9. Roadmap & recommended sequence
 
-1. **Complete MongoDB migration:** Migrate the remaining service modules (`auth`, `users`, `assets`, `monitoring`, `findings`, `incidents`, `maintenance`, `changes`, `notifications`, `dashboard`, `audit`) and `src/workers/monitor.worker.ts` onto the MongoDB repositories; validate against a live `rs0` replica set with `scripts/migrate-data.ts`; then remove Drizzle/PostgreSQL dependencies.
+1. **Complete MongoDB cutover:** Verify every runtime route, seed flow, worker, readiness check, and transaction against a live `rs0` replica set; then remove PostgreSQL fallback code and Drizzle/PostgreSQL dependencies while retaining the one-time importer if needed.
 2. **Stabilize & harden:** Keep lint, strict `tsc --noEmit`, Vitest, production build, API smoke suite (`scripts/smoke-test.ts`), and Playwright E2E green on every change.
 3. **Core infrastructure expansion:** IPAM (subnets/VLANs/allocations), network topology, asset CSV import/export.
 4. **Monitoring & alerting expansion:** Prometheus + exporter adapters, alert rules, email/chat/webhook notification sinks.

@@ -2,15 +2,29 @@ import { and, asc, desc, eq, gt, gte, ilike, inArray, lte, lt, ne, sql, type SQL
 import type { z } from "zod";
 import { db } from "@/db";
 import { assets, maintenanceAssets, maintenances, users } from "@/db/schema";
+import type { MaintenanceDoc } from "@/db/models/documents";
+import { findAssetNamesByIds } from "@/db/repositories/assets.repository";
+import {
+  claimDueMaintenanceReminder,
+  deleteMaintenanceById,
+  findMaintenanceById,
+  findMaintenanceConflicts as findMongoMaintenanceConflicts,
+  insertMaintenanceWithAssets,
+  listMaintenanceAssetLinks,
+  listMaintenances,
+  releaseMaintenanceReminderClaim,
+  updateMaintenanceWithAssets,
+} from "@/db/repositories/maintenance.repository";
 import type { AuthUser } from "@/lib/auth";
 import { errors, paginationMeta } from "@/lib/http";
 import { recordAudit } from "@/services/audit.service";
 import { assertAssetsExist } from "@/services/assets.service";
 import { humanize, iso, likeTerm, pageOffset, userNameMap } from "@/services/common";
 import { notifyUsers } from "@/services/notifications.service";
+import { activeUserIdsByRoles } from "@/services/notifications.service";
 import type { maintenanceCreateSchema, maintenanceListQuery, maintenanceUpdateSchema } from "@/validators/schemas";
 
-type MaintenanceRow = typeof maintenances.$inferSelect;
+type MaintenanceRow = typeof maintenances.$inferSelect | MaintenanceDoc;
 type CreateInput = z.infer<typeof maintenanceCreateSchema>;
 type UpdateInput = z.infer<typeof maintenanceUpdateSchema>;
 type ListQuery = z.infer<typeof maintenanceListQuery>;
@@ -42,6 +56,20 @@ function toDto(row: MaintenanceRow, ownerName: string | null, assetList: Array<{
 async function assetSummaries(maintenanceIds: string[]) {
   const map = new Map<string, Array<{ id: string; name: string }>>();
   if (maintenanceIds.length === 0) return map;
+  if (process.env.MONGODB_URI) {
+    const links = await listMaintenanceAssetLinks(maintenanceIds);
+    const names = await findAssetNamesByIds(links.map((link) => link.assetId));
+    const nameById = new Map(names.map((asset) => [asset.id, asset.name]));
+    for (const link of links) {
+      const name = nameById.get(link.assetId);
+      if (!name) continue;
+      const list = map.get(link.maintenanceId) ?? [];
+      list.push({ id: link.assetId, name });
+      map.set(link.maintenanceId, list);
+    }
+    for (const list of map.values()) list.sort((a, b) => a.name.localeCompare(b.name));
+    return map;
+  }
   const rows = await db
     .select({ maintenanceId: maintenanceAssets.maintenanceId, id: assets.id, name: assets.name })
     .from(maintenanceAssets)
@@ -59,6 +87,15 @@ async function assetSummaries(maintenanceIds: string[]) {
 /** Finds scheduled or running maintenance that overlaps the window for any of the same assets. */
 export async function findMaintenanceConflicts(assetIds: string[], startsAt: Date, endsAt: Date, excludeId?: string) {
   if (assetIds.length === 0) return [];
+  if (process.env.MONGODB_URI) {
+    const rows = await findMongoMaintenanceConflicts(assetIds, startsAt, endsAt, excludeId);
+    return rows.map((row) => ({
+      id: row.id,
+      title: row.title,
+      startsAt: row.startsAt.toISOString(),
+      endsAt: row.endsAt.toISOString(),
+    }));
+  }
   const rows = await db
     .select({ id: maintenances.id, title: maintenances.title, startsAt: maintenances.startsAt, endsAt: maintenances.endsAt })
     .from(maintenances)
@@ -80,6 +117,15 @@ export async function findMaintenanceConflicts(assetIds: string[], startsAt: Dat
 }
 
 export async function listMaintenance(q: ListQuery) {
+  if (process.env.MONGODB_URI) {
+    const result = await listMaintenances(q);
+    const owners = await userNameMap(result.items.map((row) => row.ownerId));
+    const summaries = await assetSummaries(result.items.map((row) => row.id));
+    return {
+      items: result.items.map((row) => toDto(row, row.ownerId ? owners.get(row.ownerId) ?? null : null, summaries.get(row.id) ?? [])),
+      pagination: paginationMeta(q.page, q.pageSize, result.total),
+    };
+  }
   const conditions: SQL[] = [];
   if (q.search) conditions.push(ilike(maintenances.title, likeTerm(q.search)));
   if (q.status) conditions.push(eq(maintenances.status, q.status));
@@ -106,7 +152,9 @@ export async function listMaintenance(q: ListQuery) {
 }
 
 export async function getMaintenance(id: string) {
-  const [row] = await db.select().from(maintenances).where(eq(maintenances.id, id)).limit(1);
+  const row = process.env.MONGODB_URI
+    ? await findMaintenanceById(id)
+    : (await db.select().from(maintenances).where(eq(maintenances.id, id)).limit(1))[0] ?? null;
   if (!row) throw errors.notFound("Maintenance");
   const owners = await userNameMap([row.ownerId]);
   const summaries = await assetSummaries([id]);
@@ -129,7 +177,20 @@ export async function createMaintenance(actor: AuthUser, input: CreateInput, ip:
   const endsAt = new Date(input.endsAt);
   const conflicts = await findMaintenanceConflicts(input.assetIds, startsAt, endsAt);
 
-  const row = await db.transaction(async (tx) => {
+  const row = process.env.MONGODB_URI
+    ? await insertMaintenanceWithAssets(
+        {
+          title: input.title,
+          description: input.description,
+          startsAt,
+          endsAt,
+          ownerId: input.ownerId,
+          createdById: actor.id,
+          notes: input.notes,
+        },
+        input.assetIds,
+      )
+    : await db.transaction(async (tx) => {
     const [created] = await tx
       .insert(maintenances)
       .values({
@@ -149,6 +210,7 @@ export async function createMaintenance(actor: AuthUser, input: CreateInput, ip:
     }
     return created;
   });
+  if (!row) throw errors.badRequest("Maintenance could not be scheduled");
 
   if (row.ownerId && row.ownerId !== actor.id) {
     await notifyUsers([row.ownerId], {
@@ -171,7 +233,9 @@ export async function createMaintenance(actor: AuthUser, input: CreateInput, ip:
 }
 
 export async function updateMaintenance(actor: AuthUser, id: string, input: UpdateInput, ip: string) {
-  const [before] = await db.select().from(maintenances).where(eq(maintenances.id, id)).limit(1);
+  const before = process.env.MONGODB_URI
+    ? await findMaintenanceById(id)
+    : (await db.select().from(maintenances).where(eq(maintenances.id, id)).limit(1))[0] ?? null;
   if (!before) throw errors.notFound("Maintenance");
 
   const nextStatus = input.status ?? before.status;
@@ -188,24 +252,37 @@ export async function updateMaintenance(actor: AuthUser, id: string, input: Upda
   const endsAt = input.endsAt ? new Date(input.endsAt) : before.endsAt;
   if (endsAt.getTime() <= startsAt.getTime()) throw errors.unprocessable("End time must be after start time");
 
-  const patch: Partial<typeof maintenances.$inferInsert> = { updatedAt: new Date() };
-  if (input.title !== undefined) patch.title = input.title;
-  if (input.description !== undefined) patch.description = input.description;
-  if (input.ownerId !== undefined) patch.ownerId = input.ownerId;
-  if (input.notes !== undefined) patch.notes = input.notes;
-  if (input.startsAt !== undefined) patch.startsAt = startsAt;
-  if (input.endsAt !== undefined) patch.endsAt = endsAt;
-  if (input.status !== undefined) patch.status = nextStatus;
+  if (process.env.MONGODB_URI) {
+    const patch: Partial<Pick<MaintenanceDoc, "title" | "description" | "ownerId" | "notes" | "startsAt" | "endsAt" | "status">> = {};
+    if (input.title !== undefined) patch.title = input.title;
+    if (input.description !== undefined) patch.description = input.description;
+    if (input.ownerId !== undefined) patch.ownerId = input.ownerId;
+    if (input.notes !== undefined) patch.notes = input.notes;
+    if (input.startsAt !== undefined) patch.startsAt = startsAt;
+    if (input.endsAt !== undefined) patch.endsAt = endsAt;
+    if (input.status !== undefined) patch.status = nextStatus;
+    const updated = await updateMaintenanceWithAssets(id, patch, input.assetIds);
+    if (!updated) throw errors.notFound("Maintenance");
+  } else {
+    const patch: Partial<typeof maintenances.$inferInsert> = { updatedAt: new Date() };
+    if (input.title !== undefined) patch.title = input.title;
+    if (input.description !== undefined) patch.description = input.description;
+    if (input.ownerId !== undefined) patch.ownerId = input.ownerId;
+    if (input.notes !== undefined) patch.notes = input.notes;
+    if (input.startsAt !== undefined) patch.startsAt = startsAt;
+    if (input.endsAt !== undefined) patch.endsAt = endsAt;
+    if (input.status !== undefined) patch.status = nextStatus;
 
-  await db.transaction(async (tx) => {
-    await tx.update(maintenances).set(patch).where(eq(maintenances.id, id));
-    if (input.assetIds) {
-      await tx.delete(maintenanceAssets).where(eq(maintenanceAssets.maintenanceId, id));
-      if (input.assetIds.length > 0) {
-        await tx.insert(maintenanceAssets).values(input.assetIds.map((assetId) => ({ maintenanceId: id, assetId })));
+    await db.transaction(async (tx) => {
+      await tx.update(maintenances).set(patch).where(eq(maintenances.id, id));
+      if (input.assetIds) {
+        await tx.delete(maintenanceAssets).where(eq(maintenanceAssets.maintenanceId, id));
+        if (input.assetIds.length > 0) {
+          await tx.insert(maintenanceAssets).values(input.assetIds.map((assetId) => ({ maintenanceId: id, assetId })));
+        }
       }
-    }
-  });
+    });
+  }
 
   if (input.status && input.status !== before.status) {
     await recordAudit({
@@ -230,7 +307,9 @@ export async function updateMaintenance(actor: AuthUser, id: string, input: Upda
 }
 
 export async function deleteMaintenance(actor: AuthUser, id: string, ip: string): Promise<void> {
-  const [row] = await db.delete(maintenances).where(eq(maintenances.id, id)).returning({ title: maintenances.title });
+  const row = process.env.MONGODB_URI
+    ? await deleteMaintenanceById(id)
+    : (await db.delete(maintenances).where(eq(maintenances.id, id)).returning({ title: maintenances.title }))[0] ?? null;
   if (!row) throw errors.notFound("Maintenance");
   await recordAudit({
     actorId: actor.id,
@@ -245,6 +324,26 @@ export async function deleteMaintenance(actor: AuthUser, id: string, ip: string)
 /** Sends one reminder per maintenance window that starts within the next 24 hours. Called by the worker. */
 export async function sendMaintenanceReminders(now: Date = new Date()): Promise<number> {
   const horizon = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+  if (process.env.MONGODB_URI) {
+    let sent = 0;
+    while (true) {
+      const maintenance = await claimDueMaintenanceReminder(now, horizon);
+      if (!maintenance) return sent;
+      try {
+        const operators = await activeUserIdsByRoles(["admin", "operator"]);
+        await notifyUsers([maintenance.ownerId, ...operators], {
+          type: "maintenance_reminder",
+          title: "Maintenance starts within 24 hours",
+          message: `${maintenance.title} starts ${maintenance.startsAt.toUTCString()}`,
+          link: "/maintenance",
+        });
+        sent += 1;
+      } catch (error) {
+        await releaseMaintenanceReminderClaim(maintenance.id, now);
+        throw error;
+      }
+    }
+  }
   const due = await db
     .select()
     .from(maintenances)

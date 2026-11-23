@@ -36,12 +36,21 @@ export async function listAuditLogsPaginated(query: {
   entityType?: string;
   entityId?: string;
   actorId?: string;
+  action?: string;
+  search?: string;
+  actions?: string[];
 }): Promise<{ items: AuditLogDoc[]; total: number }> {
   const col = await getCollection<AuditLogDoc>(collections.auditLogs);
   const filter: Filter<AuditLogDoc> = {};
   if (query.entityType) filter.entityType = query.entityType;
   if (query.entityId) filter.entityId = query.entityId;
   if (query.actorId) filter.actorId = query.actorId;
+  if (query.action) filter.action = query.action;
+  if (query.actions?.length) filter.action = { $in: query.actions };
+  if (query.search) {
+    const rx = new RegExp(query.search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+    filter.$or = [{ summary: rx }, { action: rx }, { entityId: rx }];
+  }
   const skip = (query.page - 1) * query.pageSize;
   const [items, total] = await Promise.all([
     col.find(filter).sort({ createdAt: -1 }).skip(skip).limit(query.pageSize).toArray(),

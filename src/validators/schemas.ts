@@ -85,6 +85,8 @@ export const userListQuery = paginationQuery.extend({
   role: userRole.optional(),
 });
 
+export const loginHistoryQuery = paginationQuery;
+
 /* ---------- assets ---------- */
 
 export const assetTypes = [
@@ -395,6 +397,8 @@ export const auditListQuery = paginationQuery.extend({
   entityType: z.string().trim().max(60).optional(),
   entityId: z.string().trim().max(64).optional(),
   actorId: uuid.optional(),
+  action: z.string().trim().max(100).optional(),
+  search: z.string().trim().max(200).optional(),
 });
 
 export type AssetInput = z.infer<typeof assetCreateSchema>;

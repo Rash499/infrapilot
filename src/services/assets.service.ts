@@ -12,6 +12,7 @@ import {
   getAssetRelatedData,
   insertAsset,
   listAssetsPaginated,
+  countAssetsByIds,
   updateAssetById,
 } from "@/db/repositories/assets.repository";
 
@@ -328,6 +329,10 @@ export async function archiveAsset(actor: AuthUser, id: string, ip: string) {
 }
 
 export async function assetHistory(id: string) {
+  if (process.env.MONGODB_URI) {
+    if (!(await findAssetById(id))) throw errors.notFound("Asset");
+    return entityHistory("asset", id);
+  }
   const [row] = await db.select({ id: assets.id }).from(assets).where(eq(assets.id, id)).limit(1);
   if (!row) throw errors.notFound("Asset");
   return entityHistory("asset", id);
@@ -335,6 +340,12 @@ export async function assetHistory(id: string) {
 
 export async function assertAssetsExist(assetIds: string[]): Promise<void> {
   if (assetIds.length === 0) return;
+  if (process.env.MONGODB_URI) {
+    if ((await countAssetsByIds(assetIds)) !== new Set(assetIds).size) {
+      throw errors.unprocessable("One or more selected assets do not exist");
+    }
+    return;
+  }
   const rows = await db.select({ id: assets.id }).from(assets).where(inArray(assets.id, assetIds));
   if (rows.length !== new Set(assetIds).size) throw errors.unprocessable("One or more selected assets do not exist");
 }

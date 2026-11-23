@@ -2,12 +2,22 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { appDbCollectionNames, appDbIndexes } from "@/db/app_db";
 import { collections, newEntityIds } from "@/db/collections";
 import {
+  deleteMonitoringTargetById,
   insertAsset,
   insertAuditLog,
   insertNotifications,
   insertRefreshToken,
+  listActiveRefreshSessions,
+  findActiveRefreshSessionById,
+  revokeRefreshTokenFamily,
   insertUser,
+  nextSequenceValue,
+  insertMaintenanceWithAssets,
   rotateRefreshTokenDoc,
+  createSecurityFinding,
+  createIncident,
+  createChangeRequest,
+  decideChangeRequest,
 } from "@/db/repositories";
 
 const mockState = vi.hoisted(() => ({
@@ -24,6 +34,27 @@ function getStore(name: string): Array<Record<string, unknown>> {
   return arr;
 }
 
+function compareValues(left: unknown, right: unknown): number | null {
+  if (left instanceof Date && right instanceof Date) return left.getTime() - right.getTime();
+  if (typeof left === "number" && typeof right === "number") return left - right;
+  if (typeof left === "string" && typeof right === "string") return left.localeCompare(right);
+  return null;
+}
+
+function matches(doc: Record<string, unknown>, filter: Record<string, unknown>): boolean {
+  return Object.entries(filter).every(([key, expected]) => {
+    const actual = doc[key];
+    if (typeof expected === "object" && expected !== null) {
+      if ("$in" in expected) return (expected.$in as unknown[]).includes(actual);
+      if ("$gt" in expected) {
+        const comparison = compareValues(actual, expected.$gt);
+        return comparison !== null && comparison > 0;
+      }
+    }
+    return actual === expected;
+  });
+}
+
 function makeMockCollection(name: string) {
   const store = getStore(name);
   return {
@@ -35,8 +66,35 @@ function makeMockCollection(name: string) {
       for (const doc of docs) store.push({ ...doc });
       return { acknowledged: true, insertedCount: docs.length };
     }),
-    findOne: vi.fn(async (filter: Record<string, unknown>) => {
-      return store.find((d) => Object.entries(filter).every(([k, v]) => d[k] === v)) ?? null;
+    findOne: vi.fn(async (filter: Record<string, unknown>) => store.find((doc) => matches(doc, filter)) ?? null),
+    find: vi.fn((filter: Record<string, unknown>) => {
+      let sortSpec: Record<string, 1 | -1> = {};
+      let limit = store.length;
+      const cursor = {
+        sort(spec: Record<string, 1 | -1>) {
+          sortSpec = spec;
+          return cursor;
+        },
+        limit(count: number) {
+          limit = count;
+          return cursor;
+        },
+        async toArray() {
+          const rows = store.filter((doc) => matches(doc, filter));
+          const sortEntries = Object.entries(sortSpec);
+          if (sortEntries.length > 0) {
+            rows.sort((a, b) => {
+              for (const [key, direction] of sortEntries) {
+                const comparison = compareValues(a[key], b[key]) ?? 0;
+                if (comparison !== 0) return comparison * direction;
+              }
+              return 0;
+            });
+          }
+          return rows.slice(0, limit).map((doc) => ({ ...doc }));
+        },
+      };
+      return cursor;
     }),
     updateOne: vi.fn(async (filter: Record<string, unknown>, update: { $set?: Record<string, unknown> }) => {
       let matchedCount = 0;
@@ -63,6 +121,42 @@ function makeMockCollection(name: string) {
       }
       return { matchedCount, modifiedCount };
     }),
+    countDocuments: vi.fn(async (filter: Record<string, unknown>) => {
+      return store.filter((doc) =>
+        Object.entries(filter).every(([key, expected]) => {
+          if (typeof expected === "object" && expected !== null && "$in" in expected) {
+            return (expected as { $in: unknown[] }).$in.includes(doc[key]);
+          }
+          return doc[key] === expected;
+        }),
+      ).length;
+    }),
+    findOneAndDelete: vi.fn(async (filter: Record<string, unknown>) => {
+      const index = store.findIndex((doc) => Object.entries(filter).every(([key, value]) => doc[key] === value));
+      if (index < 0) return null;
+      return store.splice(index, 1)[0] ?? null;
+    }),
+    findOneAndUpdate: vi.fn(async (
+      filter: Record<string, unknown>,
+      update: { $inc?: Record<string, number>; $set?: Record<string, unknown>; $setOnInsert?: Record<string, unknown> },
+    ) => {
+      let doc = store.find((item) => Object.entries(filter).every(([key, value]) => item[key] === value));
+      if (!doc) {
+        doc = { ...filter, ...update.$setOnInsert };
+        store.push(doc);
+      }
+      for (const [key, increment] of Object.entries(update.$inc ?? {})) {
+        doc[key] = Number(doc[key] ?? 0) + increment;
+      }
+      if (update.$set) Object.assign(doc, update.$set);
+      return { ...doc };
+    }),
+    deleteMany: vi.fn(async (filter: Record<string, unknown>) => {
+      const remaining = store.filter((doc) => !Object.entries(filter).every(([key, value]) => doc[key] === value));
+      const deletedCount = store.length - remaining.length;
+      store.splice(0, store.length, ...remaining);
+      return { deletedCount };
+    }),
   };
 }
 
@@ -76,10 +170,10 @@ vi.mock("@/db/collections", async (importOriginal) => {
 });
 
 describe("MongoDB collection registry & index manifest", () => {
-  it("registers all 18 InfraPilot collections consistently across collections.ts and app_db.ts", () => {
+  it("registers all 19 InfraPilot collections consistently across collections.ts and app_db.ts", () => {
     const registryNames = Object.values(collections).sort();
     const bootstrapNames = [...appDbCollectionNames].sort();
-    expect(registryNames).toHaveLength(18);
+    expect(registryNames).toHaveLength(19);
     expect(registryNames).toEqual(bootstrapNames);
   });
 
@@ -95,6 +189,11 @@ describe("MongoDB collection registry & index manifest", () => {
     const ids = newEntityIds();
     expect(ids._id).toBe(ids.id);
     expect(ids.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+  });
+
+  it("allocates monotonically increasing sequence values", async () => {
+    expect(await nextSequenceValue("incident_number")).toBe(1);
+    expect(await nextSequenceValue("incident_number")).toBe(2);
   });
 });
 
@@ -141,6 +240,46 @@ describe("MongoDB repositories (Stage 1 & core entities)", () => {
     expect(stored[1]?.revokedAt).toBeNull();
   });
 
+  it("lists only unexpired active sessions and never returns refresh-token hashes", async () => {
+    const now = new Date();
+    const active = await insertRefreshToken({
+      userId: "user-1",
+      tokenHash: "secret-hash-active",
+      familyId: "family-active",
+      expiresAt: new Date(now.getTime() + 60_000),
+      userAgent: "Test browser",
+      ipAddress: "192.0.2.10",
+    });
+    await insertRefreshToken({
+      userId: "user-1",
+      tokenHash: "secret-hash-expired",
+      familyId: "family-expired",
+      expiresAt: new Date(now.getTime() - 60_000),
+      userAgent: null,
+      ipAddress: null,
+    });
+    await insertRefreshToken({
+      userId: "user-1",
+      tokenHash: "secret-hash-revoked",
+      familyId: "family-revoked",
+      expiresAt: new Date(now.getTime() + 60_000),
+      userAgent: null,
+      ipAddress: null,
+    });
+    await revokeRefreshTokenFamily("family-revoked");
+
+    const sessions = await listActiveRefreshSessions("user-1", now);
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]).toMatchObject({
+      id: active.id,
+      familyId: "family-active",
+      userAgent: "Test browser",
+      ipAddress: "192.0.2.10",
+    });
+    expect(sessions[0]).not.toHaveProperty("tokenHash");
+    expect(await findActiveRefreshSessionById("user-1", active.id, now)).toMatchObject({ id: active.id });
+  });
+
   it("creates assets, audit logs, and deduplicated user notifications", async () => {
     const asset = await insertAsset({
       name: "edge-router-01",
@@ -156,6 +295,8 @@ describe("MongoDB repositories (Stage 1 & core entities)", () => {
     });
     expect(asset.status).toBe("unknown");
     expect(asset.archivedAt).toBeNull();
+    const { countAssetsByIds } = await import("@/db/repositories/assets.repository");
+    expect(await countAssetsByIds([asset.id, "missing"])).toBe(1);
 
     const audit = await insertAuditLog({
       actorId: "user-1",
@@ -174,5 +315,107 @@ describe("MongoDB repositories (Stage 1 & core entities)", () => {
       link: `/assets/${asset.id}`,
     });
     expect(getStore(collections.notifications)).toHaveLength(2);
+  });
+
+  it("deletes monitoring history with its target", async () => {
+    getStore(collections.monitoringTargets).push({ _id: "target-1", id: "target-1", name: "API" });
+    getStore(collections.monitoringResults).push(
+      { _id: "result-1", id: "result-1", targetId: "target-1" },
+      { _id: "result-2", id: "result-2", targetId: "target-1" },
+    );
+
+    const deleted = await deleteMonitoringTargetById("target-1");
+
+    expect(deleted?.id).toBe("target-1");
+    expect(getStore(collections.monitoringTargets)).toHaveLength(0);
+    expect(getStore(collections.monitoringResults)).toHaveLength(0);
+  });
+
+  it("creates maintenance records and asset links in a transaction", async () => {
+    const maintenance = await insertMaintenanceWithAssets(
+      {
+        title: "Edge upgrade",
+        description: "Upgrade the edge switches",
+        startsAt: new Date("2026-12-01T02:00:00.000Z"),
+        endsAt: new Date("2026-12-01T03:00:00.000Z"),
+        ownerId: "user-1",
+        createdById: "user-1",
+        notes: null,
+      },
+      ["asset-1", "asset-2"],
+    );
+
+    expect(maintenance.status).toBe("scheduled");
+    expect(maintenance.reminderSentAt).toBeNull();
+    expect(getStore(collections.maintenanceAssets)).toHaveLength(2);
+    expect(getStore(collections.maintenanceAssets).every((link) => link.maintenanceId === maintenance.id)).toBe(true);
+  });
+
+  it("creates a security finding with its initial history event atomically", async () => {
+    const finding = await createSecurityFinding(
+      {
+        title: "Outdated package",
+        description: "A production package is out of date.",
+        severity: "high",
+        assetId: "asset-1",
+        assigneeId: "user-1",
+        remediation: "Upgrade the package.",
+        cveId: null,
+        createdById: "user-1",
+      },
+      "user-1",
+    );
+
+    expect(finding.status).toBe("open");
+    const events = getStore(collections.findingEvents);
+    expect(events).toHaveLength(1);
+    expect(events[0]?.findingId).toBe(finding.id);
+    expect(events[0]?.toStatus).toBe("open");
+  });
+
+  it("allocates incident references and persists linked assets and opening timeline", async () => {
+    const incident = await createIncident(
+      {
+        title: "Edge device offline",
+        description: "The primary edge device stopped responding.",
+        severity: "high",
+        priority: "p2",
+        assigneeId: "user-1",
+      },
+      "user-1",
+      "Olu Operator",
+      ["asset-1"],
+    );
+
+    expect(incident.number).toBe(1);
+    expect(incident.status).toBe("open");
+    expect(getStore(collections.incidentAssets)).toHaveLength(1);
+    expect(getStore(collections.incidentComments)[0]?.incidentId).toBe(incident.id);
+  });
+
+  it("counts independent change approvals before advancing the workflow", async () => {
+    const change = await createChangeRequest(
+      {
+        title: "Rotate edge certificates",
+        description: "Replace expiring certificates.",
+        reason: "Certificates expire soon.",
+        riskLevel: "medium",
+        riskAssessment: "Brief service interruption possible.",
+        rollbackPlan: "Restore the prior certificate bundle.",
+        implementerId: "user-2",
+        plannedStartAt: null,
+        plannedEndAt: null,
+      },
+      "requester",
+      [],
+    );
+    getStore(collections.changeRequests)[0]!.status = "pending_approval";
+
+    const first = await decideChangeRequest(change.id, "approver-1", "approved", null, 2);
+    const second = await decideChangeRequest(change.id, "approver-2", "approved", null, 2);
+
+    expect(first.change?.status).toBe("pending_approval");
+    expect(second.change?.status).toBe("approved");
+    expect(getStore(collections.changeApprovals)).toHaveLength(2);
   });
 });

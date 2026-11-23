@@ -1,4 +1,5 @@
 import type { CreateIndexesOptions, IndexSpecification } from "mongodb";
+import type { CounterDoc } from "@/db/models/documents";
 import { getMongoDb } from "./mongo";
 
 /**
@@ -6,7 +7,7 @@ import { getMongoDb } from "./mongo";
  * Idempotent: creates missing collections and indexes only. It never drops data.
  */
 const COLLECTIONS = [
-  "users", "refresh_tokens", "password_reset_tokens", "assets",
+  "users", "counters", "refresh_tokens", "password_reset_tokens", "assets",
   "monitoring_targets", "monitoring_results", "security_findings", "finding_events",
   "incidents", "incident_assets", "incident_comments", "maintenances",
   "maintenance_assets", "change_requests", "change_assets", "change_approvals",
@@ -24,6 +25,7 @@ const INDEXES: IndexSpec[] = [
   { collection: "users", keys: { id: 1 }, options: { unique: true, name: "users_id_unique" } },
   { collection: "users", keys: { email: 1 }, options: { unique: true, name: "users_email_unique" } },
   { collection: "users", keys: { role: 1, isActive: 1 }, options: { name: "users_role_active" } },
+  { collection: "counters", keys: { id: 1 }, options: { unique: true, name: "counters_id_unique" } },
 
   { collection: "refresh_tokens", keys: { id: 1 }, options: { unique: true, name: "refresh_tokens_id_unique" } },
   { collection: "refresh_tokens", keys: { tokenHash: 1 }, options: { unique: true, name: "refresh_tokens_hash_unique" } },
@@ -90,6 +92,7 @@ const INDEXES: IndexSpec[] = [
   { collection: "notifications", keys: { userId: 1, readAt: 1, createdAt: -1 }, options: { name: "notifications_user_read_created" } },
   { collection: "audit_logs", keys: { id: 1 }, options: { unique: true, name: "audit_logs_id_unique" } },
   { collection: "audit_logs", keys: { entityType: 1, entityId: 1, createdAt: -1 }, options: { name: "audit_entity_history" } },
+  { collection: "audit_logs", keys: { entityType: 1, entityId: 1, action: 1, createdAt: -1 }, options: { name: "audit_login_history" } },
   { collection: "audit_logs", keys: { actorId: 1, createdAt: -1 }, options: { name: "audit_actor_history" } },
   { collection: "audit_logs", keys: { createdAt: -1 }, options: { name: "audit_created" } },
 ];
@@ -113,6 +116,20 @@ export async function initializeAppDatabase(): Promise<{
 
   for (const spec of INDEXES) {
     await db.collection(spec.collection).createIndex(spec.keys, spec.options);
+  }
+
+  const counters = db.collection<CounterDoc>("counters");
+  for (const [id, collection] of [
+    ["incident_number", "incidents"],
+    ["change_number", "change_requests"],
+  ] as const) {
+    const latest = await db.collection<{ number: number }>(collection).find().sort({ number: -1 }).limit(1).next();
+    const maxValue = latest?.number ?? 0;
+    await counters.updateOne(
+      { id },
+      { $max: { value: maxValue }, $setOnInsert: { _id: id, id } },
+      { upsert: true },
+    );
   }
 
   return { database: db.databaseName, collectionsCreated, indexesEnsured: INDEXES.length };

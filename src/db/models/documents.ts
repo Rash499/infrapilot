@@ -1,7 +1,7 @@
 import type { MongoEntity } from "@/db/collections";
 
 /**
- * MongoDB document contracts for all 18 InfraPilot collections.
+ * MongoDB document contracts for the InfraPilot collections.
  *
  * Design rules from the MongoDB migration specification:
  * - Domain identifiers remain UUID strings stored on both `_id` and `id` (matching the unique `{ id: 1 }`
@@ -63,6 +63,11 @@ export interface UserDoc extends MongoEntity {
   lastLoginAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
+}
+
+export interface CounterDoc extends MongoEntity {
+  id: string;
+  value: number;
 }
 
 export interface RefreshTokenDoc extends MongoEntity {

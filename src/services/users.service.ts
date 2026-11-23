@@ -1,6 +1,13 @@
 import type { AuthUser, Role } from "@/lib/auth";
 import { errors, paginationMeta } from "@/lib/http";
-import { hashPassword, verifyPassword } from "@/lib/security";
+import { hashPassword, sha256, verifyPassword } from "@/lib/security";
+import {
+  findActiveRefreshSessionById,
+  findRefreshTokenByHash,
+  listActiveRefreshSessions,
+  revokeRefreshTokenFamily,
+  type ActiveRefreshSession,
+} from "@/db/repositories/auth-tokens.repository";
 import { recordAudit } from "@/services/audit.service";
 import {
   findUserById,
@@ -91,6 +98,143 @@ export async function changePassword(actor: AuthUser, currentPassword: string, n
   await revokeAllSessions(actor.id);
   await recordAudit({ actorId: actor.id, action: "user.password_changed", entityType: "user", entityId: actor.id, summary: "Password changed; other sessions revoked", ip: meta.ip });
   return issueSession(row as unknown as UserDoc, meta);
+}
+
+export interface UserSession {
+  id: string;
+  userAgent: string | null;
+  ipAddress: string | null;
+  createdAt: string;
+  expiresAt: string;
+  current: boolean;
+}
+
+export async function listUserSessions(userId: string, currentRefreshToken: string | null): Promise<UserSession[]> {
+  const now = new Date();
+  let rows: ActiveRefreshSession[];
+  let currentFamilyId: string | null = null;
+
+  if (process.env.MONGODB_URI) {
+    const [sessions, currentToken] = await Promise.all([
+      listActiveRefreshSessions(userId, now),
+      currentRefreshToken ? findRefreshTokenByHash(sha256(currentRefreshToken)) : Promise.resolve(null),
+    ]);
+    rows = sessions;
+    if (currentToken?.userId === userId && !currentToken.revokedAt && currentToken.expiresAt > now) {
+      currentFamilyId = currentToken.familyId;
+    }
+  } else {
+    const { and, desc, eq, gt, isNull } = await import("drizzle-orm");
+    const { db } = await import("@/db");
+    const { refreshTokens } = await import("@/db/schema");
+    rows = await db
+      .select({
+        id: refreshTokens.id,
+        familyId: refreshTokens.familyId,
+        userAgent: refreshTokens.userAgent,
+        ipAddress: refreshTokens.ipAddress,
+        createdAt: refreshTokens.createdAt,
+        expiresAt: refreshTokens.expiresAt,
+      })
+      .from(refreshTokens)
+      .where(and(eq(refreshTokens.userId, userId), isNull(refreshTokens.revokedAt), gt(refreshTokens.expiresAt, now)))
+      .orderBy(desc(refreshTokens.createdAt))
+      .limit(50);
+    if (currentRefreshToken) {
+      const [currentToken] = await db
+        .select({ familyId: refreshTokens.familyId })
+        .from(refreshTokens)
+        .where(
+          and(
+            eq(refreshTokens.tokenHash, sha256(currentRefreshToken)),
+            eq(refreshTokens.userId, userId),
+            isNull(refreshTokens.revokedAt),
+            gt(refreshTokens.expiresAt, now),
+          ),
+        )
+        .limit(1);
+      currentFamilyId = currentToken?.familyId ?? null;
+    }
+  }
+
+  return rows.map(({ id, familyId, userAgent, ipAddress, createdAt, expiresAt }) => ({
+    id,
+    userAgent,
+    ipAddress,
+    createdAt: createdAt.toISOString(),
+    expiresAt: expiresAt.toISOString(),
+    current: familyId === currentFamilyId,
+  }));
+}
+
+export async function revokeUserSession(
+  actor: AuthUser,
+  targetUserId: string,
+  sessionId: string,
+  currentRefreshToken: string | null,
+  meta: RequestMeta,
+): Promise<void> {
+  const now = new Date();
+
+  if (process.env.MONGODB_URI) {
+    const target = await findActiveRefreshSessionById(targetUserId, sessionId, now);
+    if (!target) throw errors.notFound("Session");
+    const currentToken = actor.id === targetUserId && currentRefreshToken
+      ? await findRefreshTokenByHash(sha256(currentRefreshToken))
+      : null;
+    if (currentToken?.userId === targetUserId && !currentToken.revokedAt && currentToken.familyId === target.familyId) {
+      throw errors.badRequest("Use log out to end the current session");
+    }
+    await revokeRefreshTokenFamily(target.familyId);
+  } else {
+    const { and, eq, gt, isNull } = await import("drizzle-orm");
+    const { db } = await import("@/db");
+    const { refreshTokens } = await import("@/db/schema");
+    const [row] = await db
+      .select({ id: refreshTokens.id, familyId: refreshTokens.familyId })
+      .from(refreshTokens)
+      .where(
+        and(
+          eq(refreshTokens.id, sessionId),
+          eq(refreshTokens.userId, targetUserId),
+          isNull(refreshTokens.revokedAt),
+          gt(refreshTokens.expiresAt, now),
+        ),
+      )
+      .limit(1);
+    if (!row) throw errors.notFound("Session");
+    if (actor.id === targetUserId && currentRefreshToken) {
+      const [currentToken] = await db
+        .select({ familyId: refreshTokens.familyId })
+        .from(refreshTokens)
+        .where(
+          and(
+            eq(refreshTokens.tokenHash, sha256(currentRefreshToken)),
+            eq(refreshTokens.userId, targetUserId),
+            isNull(refreshTokens.revokedAt),
+            gt(refreshTokens.expiresAt, now),
+          ),
+        )
+        .limit(1);
+      if (currentToken?.familyId === row.familyId) {
+        throw errors.badRequest("Use log out to end the current session");
+      }
+    }
+    await db
+      .update(refreshTokens)
+      .set({ revokedAt: now })
+      .where(and(eq(refreshTokens.userId, targetUserId), eq(refreshTokens.familyId, row.familyId), isNull(refreshTokens.revokedAt)));
+  }
+
+  await recordAudit({
+    actorId: actor.id,
+    action: "user.session_revoked",
+    entityType: "user",
+    entityId: targetUserId,
+    summary: actor.id === targetUserId ? "An account session was revoked" : "An administrator revoked an account session",
+    metadata: { sessionId, targetUserId },
+    ip: meta.ip,
+  });
 }
 
 export async function updateUserByAdmin(

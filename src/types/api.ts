@@ -42,6 +42,14 @@ export interface AuditEntry {
   actorName: string;
 }
 
+export interface LoginHistoryEntry {
+  id: string;
+  action: "auth.login" | "auth.login_failed";
+  createdAt: string;
+  ipAddress: string | null;
+  userAgent: string | null;
+}
+
 export type AssetType =
   | "physical_server"
   | "virtual_machine"
@@ -254,6 +262,15 @@ export interface NotificationItem {
   createdAt: string;
 }
 
+export interface AccountSession {
+  id: string;
+  userAgent: string | null;
+  ipAddress: string | null;
+  createdAt: string;
+  expiresAt: string;
+  current: boolean;
+}
+
 export interface Dashboard {
   range: { days: number; from: string; to: string };
   kpis: {
@@ -275,8 +292,47 @@ export interface Dashboard {
   assetDistribution: { type: string; label: string; count: number }[];
   incidentBySeverity: { severity: string; count: number }[];
   findingsByStatus: { status: string; label: string; count: number }[];
+  monitoringSummary: { uptimePct: number | null; checks: number };
   responseTrend: { ts: string; avgResponseMs: number | null; checks: number; uptimePct: number | null }[];
+  attentionServices: {
+    id: string;
+    name: string;
+    monitorType: "http" | "tcp";
+    status: ServiceState;
+    assetName: string | null;
+    lastCheckedAt: string | null;
+    lastError: string | null;
+    consecutiveFailures: number;
+  }[];
+  overdueServices: {
+    id: string;
+    name: string;
+    monitorType: "http" | "tcp";
+    status: ServiceState;
+    assetName: string | null;
+    nextCheckAt: string;
+    lastCheckedAt: string | null;
+    intervalSeconds: number;
+  }[];
   upcomingMaintenance: { id: string; title: string; startsAt: string; endsAt: string; ownerName: string | null }[];
   recentChanges: { id: string; reference: string; title: string; status: string; riskLevel: string; requesterName: string | null; updatedAt: string }[];
+  recentIncidents: {
+    id: string;
+    reference: string;
+    title: string;
+    severity: string;
+    status: string;
+    assigneeName: string | null;
+    openedAt: string;
+  }[];
+  criticalFindings: {
+    id: string;
+    title: string;
+    severity: string;
+    status: string;
+    assetName: string | null;
+    cveId: string | null;
+    updatedAt: string;
+  }[];
   generatedAt: string;
 }

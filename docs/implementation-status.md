@@ -1,6 +1,6 @@
 # InfraPilot Ultimate — Implementation Status
 
-Last reviewed: 2026-11-21  
+Last reviewed: 2026-11-23
 Branch: `feature/infra-pilot-ultimate-foundation`
 
 This is a repository inspection snapshot, not a claim that every listed capability has passed runtime tests. Status labels:
@@ -16,16 +16,16 @@ This is a repository inspection snapshot, not a claim that every listed capabili
 |---|---|---|---|
 | Authentication | Present — verification pending | `src/controllers/auth.controller.ts`, `src/services/auth.service.ts`, `src/lib/auth.ts`, auth pages | Regression tests, session management UI, verify password reset delivery and origin/CSRF behavior |
 | RBAC | Partial | User roles admin/operator/viewer and API authorization | Expand to granular permissions and requested role set |
-| User administration | Present — verification pending | `src/controllers/users.controller.ts`, `src/services/users.service.ts`, `src/app/(app)/users` | Session inventory, login history, permission matrix |
-| Asset inventory | Present — verification pending | `src/controllers/assets.controller.ts`, `src/services/assets.service.ts`, asset pages and schema | Full field coverage, CSV import/export, richer relationships and lifecycle |
+| User administration | Partial — expanded | Role changes, activation controls, self-service and administrator session visibility/revocation, paginated successful/failed sign-in history, session-revocation audit events, and a matrix derived from server-enforced role levels | Configurable/granular permissions |
+| Asset inventory | Present — verification pending | `src/controllers/assets.controller.ts`, `src/services/assets.service.ts`, asset pages and schema; CSV import/export with row validation and error reporting | Richer relationships and lifecycle |
 | Monitoring | Present — verification pending | Monitoring controller/service, worker, probe, target/result tables and page | Prometheus/exporter adapters, alert rules, retention verification, DNS/TCP/HTTP breadth |
 | Security findings | Present — verification pending | Findings service/routes/UI, severity/status and finding history | CVSS, scanner ingestion, deduplication, export |
 | Incidents | Present — verification pending | Incident service/routes/UI, comments, asset links | Service requests, SLA/escalation, complete timeline and cross-module links |
 | Maintenance | Present — verification pending | Maintenance service/routes/UI and asset links | Conflict policy, richer scheduling and reminder verification |
 | Change management | Present — verification pending | Change service/routes/UI, approvals and audit | Multi-approver policy, separation of duties and risk workflow tests |
 | Notifications | Partial | In-app notification service and page | Preferences, email/Telegram/webhook delivery, retries and delivery history |
-| Dashboard | Present — verification pending | Dashboard service and overview page | Expand to all module KPIs; ensure every visualization uses live data |
-| Audit | Present — verification pending | Audit service, schema and admin UI | Search/filter coverage and immutable-write tests |
+| Dashboard | Partial — expanded | Live operational KPIs, range-weighted monitoring uptime, response trends, distributions, maintenance/change lists, active incident and critical/high finding panels, degraded/unavailable services, overdue checks, and visibility-aware automatic refresh | Verify live MongoDB aggregations; add KPIs as new domains ship |
+| Audit | Partial — expanded | Append-only audit records, admin UI with summary/action/entity-ID search and entity/action filters, plus account sign-in history with IP/device details | Immutable-write tests |
 | IPAM / subnet / VLAN | Planned | No dedicated network/IPAM domain in current tree | Network, subnet, IP, VLAN, DNS record models and allocation constraints |
 | Network topology | Planned | No React Flow topology module in current tree | Persisted graph editor, import/export, asset relationships |
 | Network performance | Partial | Basic HTTP/TCP availability checks | Prometheus/Blackbox, latency/loss/bandwidth and interface telemetry |
@@ -52,16 +52,16 @@ This is a repository inspection snapshot, not a claim that every listed capabili
 
 ## Repository and delivery findings
 
-1. The current repository contains a Next.js 16 / React 19 / TypeScript application with PostgreSQL and Drizzle. It does not use the Vite + Express + Prisma stack named in the reference specification. The architecture blueprint records the decision to preserve the existing stack and avoid a high-risk rewrite.
-2. The repository tree reviewed on 2026-11-21 did not contain a `package-lock.json`, while the existing CI workflow and README used `npm ci`. `npm ci` requires a lockfile. The foundation branch changes CI to `npm install` so CI is not blocked by the missing file; a generated and reviewed lockfile should be committed before treating dependency resolution as reproducible.
-3. Package scripts now expose `npm test`, `npm run test:watch` and `npm run test:e2e`.
-4. GitHub Actions CI run #5 on the audited main commit completed successfully: dependency installation, lint, Next.js type generation, TypeScript type-check, Vitest unit/component tests, production build, Drizzle migration, seed and Playwright E2E all passed. This verifies only the checks and workflows currently configured; it does not establish coverage of all 30 requested modules.
+1. The repository contains a Next.js 16 / React 19 / TypeScript application with MongoDB as the configured deployment and CI database. PostgreSQL/Drizzle compatibility and migration code remain during the staged cutover. It does not use the Vite + Express + Prisma stack named in the reference specification.
+2. `package-lock.json` is present and Docker/CI use `npm ci` for reproducible dependency installation.
+3. Package scripts expose `npm test`, `npm run test:e2e`, and MongoDB initialization, seed, and check commands.
+4. GitHub Actions now starts a MongoDB replica set for Playwright E2E. A live run of the updated pipeline is still needed to verify the new MongoDB deployment path; historical PostgreSQL CI results do not establish that.
 5. External integrations (Prometheus, exporters, GitHub, Docker Engine, Kubernetes, Trivy, Greenbone, Restic, SMTP and Telegram) require their own installation, credentials and network policy. They must be shown as unconfigured until a successful connection test exists.
 
 ## Immediate next work
 
-1. Obtain a clean, reproducible dependency install and commit the lockfile.
-2. Run and repair lint, type-check, unit/component tests, migration/seed, production build and Playwright E2E.
+1. Run the MongoDB CI/E2E workflow against a live `rs0` and resolve any integration failures.
+2. Complete PostgreSQL fallback/dependency removal only after every runtime route and worker passes against MongoDB.
 3. Audit authentication, cross-origin behavior, RBAC and audit logging with focused tests.
 4. Complete the core infrastructure slice: asset fields/import/export, IPAM and persisted topology.
 5. Complete real monitoring integrations and alert lifecycle before adding more dashboards.
@@ -79,4 +79,5 @@ This is a repository inspection snapshot, not a claim that every listed capabili
 | Local dependency install | Not run | Local clone unavailable in this execution environment; CI dependency installation passed using `npm install` |
 | Lint / type-check / build | Passed in CI | [CI run #5](https://github.com/Rash499/infrapilot/actions/runs/44805892512), main commit `f15c299` |
 | Unit / component / E2E tests | Passed in CI | [CI run #5](https://github.com/Rash499/infrapilot/actions/runs/44805892512); configured suite only |
+| Local MongoDB replica-set verification | Passed | `npm run db:init:mongo`; `npm test` (92 tests); typecheck; production build; `npm run test:e2e` (5 tests), including sign-in history, audit filtering and persisted monitoring worker results |
 | Production deployment | Not deployed | No deployment environment configured |

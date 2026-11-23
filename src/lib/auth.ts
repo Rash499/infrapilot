@@ -2,8 +2,9 @@ import { errors } from "@/lib/http";
 import { verifyAccessToken } from "@/lib/security";
 import { getEnv } from "@/lib/env";
 import { findUserById } from "@/db/repositories/users.repository";
-
-export type Role = "admin" | "operator" | "viewer";
+import { PERMISSIONS, type Role } from "@/lib/permissions";
+export { PERMISSIONS } from "@/lib/permissions";
+export type { Role } from "@/lib/permissions";
 
 export interface AuthUser {
   id: string;
@@ -14,13 +15,6 @@ export interface AuthUser {
 
 export const REFRESH_COOKIE = "infrapilot_refresh";
 export const REFRESH_COOKIE_PATH = "/api/v1/auth";
-
-/** Role matrix enforced on the server. Viewer = read; Operator = read + write; Administrator = everything. */
-export const PERMISSIONS = {
-  read: ["admin", "operator", "viewer"] as Role[],
-  write: ["admin", "operator"] as Role[],
-  admin: ["admin"] as Role[],
-};
 
 /** Resolves the bearer token to a fresh, active user. Role changes apply immediately. */
 export async function requireUser(req: Request): Promise<AuthUser> {
@@ -46,7 +40,7 @@ export async function requireUser(req: Request): Promise<AuthUser> {
   return { id: row.id, email: row.email, name: row.name, role: row.role };
 }
 
-export function requireRole(user: AuthUser, allowed: Role[]): void {
+export function requireRole(user: AuthUser, allowed: readonly Role[]): void {
   if (!allowed.includes(user.role)) throw errors.forbidden();
 }
 

@@ -1,10 +1,10 @@
-# InfraPilot local / single-host deployment.
-# Usage: cp .env.example .env  (set POSTGRES_PASSWORD and JWT_ACCESS_SECRET)  then  docker compose up -d --build
+# MongoDB 8 single-node replica set (rs0) deployment topology.
 name: infrapilot
 
 x-app-env: &app-env
   NODE_ENV: production
-  DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-app_db}
+  MONGODB_URI: mongodb://${MONGO_APP_USER:?Set MONGO_APP_USER in .env}:${MONGO_APP_PASSWORD:?Set MONGO_APP_PASSWORD in .env}@mongo:27017/${MONGODB_DB:-infrapilot}?authSource=${MONGODB_DB:-infrapilot}&replicaSet=rs0
+  MONGODB_DB: ${MONGODB_DB:-infrapilot}
   JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?Set JWT_ACCESS_SECRET in .env (min 32 chars)}
   ACCESS_TOKEN_TTL_SECONDS: ${ACCESS_TOKEN_TTL_SECONDS:-900}
   REFRESH_TOKEN_TTL_DAYS: ${REFRESH_TOKEN_TTL_DAYS:-14}
@@ -16,22 +16,43 @@ x-app-env: &app-env
   MONITOR_RETENTION_DAYS: ${MONITOR_RETENTION_DAYS:-30}
 
 services:
-  db:
-    image: postgres:16-alpine
+  mongo:
+    image: mongo:8.0
     restart: unless-stopped
+    entrypoint: ["/bin/bash", "/usr/local/bin/start-mongodb.sh"]
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
-      POSTGRES_DB: ${POSTGRES_DB:-app_db}
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER:?Set MONGO_ROOT_USER in .env}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:?Set MONGO_ROOT_PASSWORD in .env}
+      MONGO_INITDB_DATABASE: ${MONGODB_DB:-infrapilot}
+      MONGODB_DB: ${MONGODB_DB:-infrapilot}
+      MONGO_REPLICA_KEY: ${MONGO_REPLICA_KEY:?Set MONGO_REPLICA_KEY in .env}
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - mongodata:/data/db
+      - ./scripts/start-mongodb.sh:/usr/local/bin/start-mongodb.sh:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-postgres} -d $${POSTGRES_DB:-app_db}"]
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
       interval: 5s
       timeout: 5s
       retries: 20
     ports:
-      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+      - "127.0.0.1:${MONGO_PORT:-27017}:27017"
+
+  mongo-init:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: "no"
+    depends_on:
+      mongo:
+        condition: service_healthy
+    command: ["npx", "tsx", "src/db/bootstrap-mongodb.ts"]
+    environment:
+      <<: *app-env
+      MONGO_ROOT_USER: ${MONGO_ROOT_USER:?Set MONGO_ROOT_USER in .env}
+      MONGO_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:?Set MONGO_ROOT_PASSWORD in .env}
+      MONGO_HOST: mongo
+      MONGO_APP_USER: ${MONGO_APP_USER:?Set MONGO_APP_USER in .env}
+      MONGO_APP_PASSWORD: ${MONGO_APP_PASSWORD:?Set MONGO_APP_PASSWORD in .env}
 
   app:
     build:
@@ -39,8 +60,8 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     depends_on:
-      db:
-        condition: service_healthy
+      mongo-init:
+        condition: service_completed_successfully
     environment:
       <<: *app-env
       INFRAPILOT_EMBEDDED_WORKER: "false"
@@ -67,4 +88,4 @@ services:
       INFRAPILOT_EMBEDDED_WORKER: "false"
 
 volumes:
-  pgdata:
+  mongodata:

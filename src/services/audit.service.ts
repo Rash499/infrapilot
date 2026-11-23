@@ -80,6 +80,9 @@ export async function listAudit(q: {
   entityType?: string;
   entityId?: string;
   actorId?: string;
+  action?: string;
+  search?: string;
+  actions?: string[];
 }) {
   if (process.env.MONGODB_URI) {
     const result = await listAuditLogsPaginated(q);
@@ -100,13 +103,19 @@ export async function listAudit(q: {
     return { items, pagination: paginationMeta(q.page, q.pageSize, result.total) };
   }
 
-  const { and, desc, eq, sql } = await import("drizzle-orm");
+  const { and, desc, eq, ilike, inArray, or, sql } = await import("drizzle-orm");
   const { db } = await import("@/db");
   const { auditLogs, users } = await import("@/db/schema");
   const conditions: SQL[] = [];
   if (q.entityType) conditions.push(eq(auditLogs.entityType, q.entityType));
   if (q.entityId) conditions.push(eq(auditLogs.entityId, q.entityId));
   if (q.actorId) conditions.push(eq(auditLogs.actorId, q.actorId));
+  if (q.action) conditions.push(eq(auditLogs.action, q.action));
+  if (q.actions?.length) conditions.push(inArray(auditLogs.action, q.actions));
+  if (q.search) {
+    const pattern = `%${q.search.replace(/[\\%_]/g, "\\$&")}%`;
+    conditions.push(or(ilike(auditLogs.summary, pattern), ilike(auditLogs.action, pattern), ilike(auditLogs.entityId, pattern))!);
+  }
   const where = conditions.length ? and(...conditions) : undefined;
   const rows = await db
     .select({
@@ -129,6 +138,32 @@ export async function listAudit(q: {
     .offset((q.page - 1) * q.pageSize);
   const [count] = await db.select({ total: sql<number>`count(*)::int` }).from(auditLogs).where(where);
   return { items: rows.map(mapAudit), pagination: paginationMeta(q.page, q.pageSize, count?.total ?? 0) };
+}
+
+export async function listLoginHistory(userId: string, q: { page: number; pageSize: number }) {
+  const result = await listAudit({
+    ...q,
+    entityType: "user",
+    entityId: userId,
+    actions: ["auth.login", "auth.login_failed"],
+  });
+  return {
+    items: result.items.map((entry) => {
+      const metadata = entry.metadata;
+      const userAgent =
+        metadata && typeof metadata === "object" && "userAgent" in metadata && typeof metadata.userAgent === "string"
+          ? metadata.userAgent
+          : null;
+      return {
+        id: entry.id,
+        action: entry.action,
+        createdAt: entry.createdAt,
+        ipAddress: entry.ipAddress,
+        userAgent,
+      };
+    }),
+    pagination: result.pagination,
+  };
 }
 
 export async function entityHistory(entityType: string, entityId: string, limit = 100) {

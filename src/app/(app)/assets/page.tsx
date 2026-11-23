@@ -1,16 +1,29 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
-import { Archive, ArchiveRestore, Pencil, Plus, Search } from "lucide-react";
+import { useEffect, useRef, useState, type ChangeEvent } from "react";
+import { Archive, ArchiveRestore, Download, Pencil, Plus, Search, Upload } from "lucide-react";
 import { AssetFormModal } from "@/components/forms/asset-form";
-import { Button, Card, ConfirmDialog, DataTable, EmptyState, ErrorState, Input, PageHeader, Pagination, Select, Td, TableSkeleton, Th, StatusBadge } from "@/components/ui";
+import { Button, Card, ConfirmDialog, DataTable, EmptyState, ErrorState, Input, Modal, PageHeader, Pagination, Select, Td, TableSkeleton, Th, StatusBadge } from "@/components/ui";
 import { useAuth } from "@/context/auth-context";
 import { useToast } from "@/context/toast-context";
 import { fetchData, fetchList, getErrorMessage, sendData } from "@/lib/client/api";
 import { useAsync } from "@/lib/client/use-async";
+import { assetsToCsv, MAX_ASSET_IMPORT_ROWS, parseAssetsCsv, type AssetCsvError, type AssetCsvImport } from "@/lib/assets-csv";
 import { ASSET_STATUS_OPTIONS, ASSET_TYPE_OPTIONS, ENVIRONMENT_OPTIONS, fmtRelative, humanize } from "@/lib/format";
 import type { Asset, UserOption } from "@/types/api";
+
+interface AssetImportPreview extends AssetCsvImport {
+  fileName: string;
+}
+
+interface AssetImportReport {
+  total: number;
+  imported: number;
+  errors: AssetCsvError[];
+}
+
+const MAX_ASSET_CSV_BYTES = 5 * 1024 * 1024;
 
 export default function AssetsPage() {
   const { can } = useAuth();
@@ -28,6 +41,11 @@ export default function AssetsPage() {
   const [editing, setEditing] = useState<Asset | null>(null);
   const [archiveTarget, setArchiveTarget] = useState<Asset | null>(null);
   const [busy, setBusy] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [importPreview, setImportPreview] = useState<AssetImportPreview | null>(null);
+  const [importReport, setImportReport] = useState<AssetImportReport | null>(null);
+  const csvInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const t = window.setTimeout(() => setDebounced(search.trim()), 300);
@@ -45,6 +63,78 @@ export default function AssetsPage() {
   const owners = useAsync(() => fetchData<UserOption[]>("/users/options"), []);
 
   const reload = () => list.reload();
+
+  const exportCsv = async () => {
+    setExporting(true);
+    try {
+      const filters = { pageSize: 100, search: debounced, assetType, environment, status, archived, sort, order };
+      const first = await fetchList<Asset>("/assets", { ...filters, page: 1 });
+      const assets = [...first.items];
+      for (let currentPage = 2; currentPage <= first.meta.totalPages; currentPage += 1) {
+        const pageResult = await fetchList<Asset>("/assets", { ...filters, page: currentPage });
+        assets.push(...pageResult.items);
+      }
+
+      const blob = new Blob(["\uFEFF", assetsToCsv(assets)], { type: "text/csv;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `infrapilot-assets-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.append(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 0);
+      toast.success(`Exported ${assets.length} asset${assets.length === 1 ? "" : "s"}`);
+    } catch (err) {
+      toast.error(getErrorMessage(err));
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const selectCsv = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = "";
+    if (!file) return;
+    if (file.size > MAX_ASSET_CSV_BYTES) {
+      toast.error("CSV files must be 5 MB or smaller.");
+      return;
+    }
+    try {
+      const parsed = parseAssetsCsv(await file.text());
+      setImportReport(null);
+      setImportPreview({ fileName: file.name, ...parsed });
+    } catch (err) {
+      toast.error(getErrorMessage(err));
+    }
+  };
+
+  const importCsv = async () => {
+    if (!importPreview || importPreview.errors.length > 0 || importPreview.rows.length === 0) return;
+    setImporting(true);
+    let imported = 0;
+    const errors: AssetCsvError[] = [];
+    try {
+      for (const row of importPreview.rows) {
+        try {
+          await sendData("post", "/assets", row.payload);
+          imported += 1;
+        } catch (err) {
+          errors.push({ rowNumber: row.rowNumber, message: getErrorMessage(err) });
+        }
+      }
+      setImportReport({ total: importPreview.rows.length, imported, errors });
+      setImportPreview(null);
+      reload();
+      if (errors.length === 0) {
+        toast.success(`Imported ${imported} asset${imported === 1 ? "" : "s"}`);
+      } else {
+        toast.error(`Imported ${imported} of ${importPreview.rows.length} assets. Review the row errors below.`);
+      }
+    } finally {
+      setImporting(false);
+    }
+  };
 
   const handleArchive = async () => {
     if (!archiveTarget) return;
@@ -82,19 +172,53 @@ export default function AssetsPage() {
         title="Infrastructure assets"
         description="Servers, virtual machines, network devices, cloud resources, containers, databases and applications."
         actions={
-          can("write") ? (
-            <Button
-              onClick={() => {
-                setEditing(null);
-                setFormOpen(true);
-              }}
-            >
-              <Plus className="size-4" aria-hidden="true" />
-              Register asset
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" onClick={() => void exportCsv()} loading={exporting}>
+              <Download className="size-4" aria-hidden="true" />
+              Export CSV
             </Button>
-          ) : null
+            {can("write") ? (
+              <>
+                <input ref={csvInput} type="file" accept=".csv,text/csv" className="hidden" onChange={(event) => void selectCsv(event)} />
+                <Button variant="outline" onClick={() => csvInput.current?.click()}>
+                  <Upload className="size-4" aria-hidden="true" />
+                  Import CSV
+                </Button>
+                <Button
+                  onClick={() => {
+                    setEditing(null);
+                    setFormOpen(true);
+                  }}
+                >
+                  <Plus className="size-4" aria-hidden="true" />
+                  Register asset
+                </Button>
+              </>
+            ) : null}
+          </div>
         }
       />
+
+      {importReport ? (
+        <Card className="p-4">
+          <div role={importReport.errors.length > 0 ? "alert" : "status"} aria-live="polite">
+            <p className="text-sm font-medium text-fg">
+              Imported {importReport.imported} of {importReport.total} assets.
+              {importReport.errors.length > 0 ? ` ${importReport.errors.length} rows failed.` : ""}
+            </p>
+            {importReport.errors.length > 0 ? (
+              <details className="mt-2 text-sm text-muted">
+                <summary className="cursor-pointer">Review failed rows</summary>
+                <ul className="mt-2 max-h-48 space-y-1 overflow-y-auto">
+                  {importReport.errors.map((error) => (
+                    <li key={`${error.rowNumber}-${error.message}`}>Row {error.rowNumber}: {error.message}</li>
+                  ))}
+                </ul>
+              </details>
+            ) : null}
+          </div>
+        </Card>
+      ) : null}
 
       <Card className="p-4">
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
@@ -245,6 +369,52 @@ export default function AssetsPage() {
         onClose={() => setFormOpen(false)}
         onSaved={() => reload()}
       />
+
+      <Modal
+        open={!!importPreview}
+        onClose={() => {
+          if (!importing) setImportPreview(null);
+        }}
+        title="Import assets from CSV"
+        description={importPreview?.fileName}
+        size="lg"
+        footer={
+          <>
+            <Button variant="outline" onClick={() => setImportPreview(null)} disabled={importing}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() => void importCsv()}
+              loading={importing}
+              disabled={!importPreview || importPreview.errors.length > 0 || importPreview.rows.length === 0}
+            >
+              Import {importPreview?.rows.length ?? 0} assets
+            </Button>
+          </>
+        }
+      >
+        {importPreview ? (
+          <div className="space-y-4 text-sm">
+            <p className="text-muted">
+              {importPreview.rows.length} valid row{importPreview.rows.length === 1 ? "" : "s"} ready to import. Up to {MAX_ASSET_IMPORT_ROWS} assets are accepted per file.
+            </p>
+            <p className="text-muted">Import creates new assets; it does not update existing records. Export follows the current list filters.</p>
+            <p className="text-muted">
+              Required columns: <code>name</code>, <code>assetType</code>, <code>environment</code>. Optional columns: hostname, ipAddress, operatingSystem, location, ownerId, description, status.
+            </p>
+            {importPreview.errors.length > 0 ? (
+              <div role="alert" className="rounded-md border border-rose-500/30 bg-rose-500/10 p-3 text-rose-500">
+                <p className="font-medium">{importPreview.errors.length} row{importPreview.errors.length === 1 ? "" : "s"} need correction. No assets will be imported.</p>
+                <ul className="mt-2 max-h-48 space-y-1 overflow-y-auto">
+                  {importPreview.errors.map((error) => (
+                    <li key={`${error.rowNumber}-${error.message}`}>Row {error.rowNumber}: {error.message}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+      </Modal>
 
       <ConfirmDialog
         open={!!archiveTarget}

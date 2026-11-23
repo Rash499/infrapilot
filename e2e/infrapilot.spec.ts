@@ -23,6 +23,23 @@ test.describe("InfraPilot end-to-end", () => {
     await expect(page.getByText("Invalid email or password")).toBeVisible();
   });
 
+  test("shows account sign-in history to administrators", async ({ page }) => {
+    await signIn(page);
+    await page.goto("/users");
+    const accountRow = page.getByRole("row").filter({ hasText: email });
+    await accountRow.getByRole("button", { name: /View sign-in history/ }).click();
+    await expect(page.getByRole("dialog")).toContainText("Successful sign-in");
+  });
+
+  test("filters audit records by action and summary", async ({ page }) => {
+    await signIn(page);
+    await page.goto("/users");
+    await page.getByRole("button", { name: "Audit log", exact: true }).click();
+    await page.getByLabel("Filter audit by action").selectOption("auth.login");
+    await page.getByLabel("Search audit log").fill("Signed in");
+    await expect(page.getByText("Signed in").first()).toBeVisible();
+  });
+
   test("registers an asset, configures a monitor, opens an incident and records a finding", async ({ page }) => {
     await signIn(page);
 

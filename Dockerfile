@@ -5,8 +5,8 @@
 FROM node:22-alpine AS deps
 WORKDIR /app
 COPY package.json ./
-# The repository does not currently commit a lockfile; install from the declared manifest.
-RUN npm install --no-audit --no-fund
+COPY package-lock.json ./
+RUN npm ci --no-audit --no-fund
 
 FROM node:22-alpine AS build
 WORKDIR /app
@@ -27,5 +27,4 @@ USER infrapilot
 EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
   CMD wget -qO- http://127.0.0.1:3000/api/health || exit 1
-# Apply pending migrations, then start the web server.
-CMD ["sh", "-c", "npx drizzle-kit migrate && npm run start"]
+CMD ["npm", "run", "start"]

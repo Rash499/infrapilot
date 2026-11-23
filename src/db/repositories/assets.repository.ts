@@ -39,6 +39,29 @@ export async function findAssetById(id: string, session?: ClientSession): Promis
   return col.findOne({ id }, { session });
 }
 
+export async function countAssetsByIds(ids: string[], session?: ClientSession): Promise<number> {
+  if (ids.length === 0) return 0;
+  const col = await getCollection<AssetDoc>(collections.assets);
+  return col.countDocuments({ id: { $in: [...new Set(ids)] } }, { session });
+}
+
+export async function findAssetNamesByIds(ids: string[]): Promise<Array<Pick<AssetDoc, "id" | "name">>> {
+  if (ids.length === 0) return [];
+  const col = await getCollection<AssetDoc>(collections.assets);
+  return col
+    .find({ id: { $in: [...new Set(ids)] } }, { projection: { _id: 0, id: 1, name: 1 } })
+    .toArray();
+}
+
+export async function findAssetsByIds(ids: string[]): Promise<Array<Pick<AssetDoc, "id" | "name" | "assetType" | "status">>> {
+  if (ids.length === 0) return [];
+  const col = await getCollection<AssetDoc>(collections.assets);
+  return col
+    .find({ id: { $in: [...new Set(ids)] } }, { projection: { _id: 0, id: 1, name: 1, assetType: 1, status: 1 } })
+    .sort({ name: 1 })
+    .toArray();
+}
+
 export async function insertAsset(input: NewAssetInput, session?: ClientSession): Promise<AssetDoc> {
   const col = await getCollection<AssetDoc>(collections.assets);
   const now = new Date();

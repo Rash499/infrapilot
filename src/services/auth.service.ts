@@ -132,10 +132,27 @@ export async function login(input: { email: string; password: string }, meta: Re
   if (user) passwordOk = await verifyPassword(input.password, user.passwordHash);
   else await verifyPassword(input.password, await DUMMY_HASH_PROMISE);
   if (!user || !passwordOk) {
-    await recordAudit({ action: "auth.login_failed", entityType: "user", entityId: user?.id ?? "unknown", summary: "Failed sign-in attempt", ip: meta.ip });
+    await recordAudit({
+      action: "auth.login_failed",
+      entityType: "user",
+      entityId: user?.id ?? "unknown",
+      summary: "Failed sign-in attempt",
+      metadata: { userAgent: meta.userAgent },
+      ip: meta.ip,
+    });
     throw errors.unauthorized("Invalid email or password");
   }
-  if (!user.isActive) throw errors.forbidden("This account has been deactivated. Contact an administrator.");
+  if (!user.isActive) {
+    await recordAudit({
+      action: "auth.login_failed",
+      entityType: "user",
+      entityId: user.id,
+      summary: "Failed sign-in attempt for deactivated account",
+      metadata: { userAgent: meta.userAgent },
+      ip: meta.ip,
+    });
+    throw errors.forbidden("This account has been deactivated. Contact an administrator.");
+  }
   if (process.env.MONGODB_URI) await updateUserById(user.id, { lastLoginAt: new Date() });
   else {
     const { eq } = await import("drizzle-orm");
@@ -143,7 +160,15 @@ export async function login(input: { email: string; password: string }, meta: Re
     const { users } = await import("@/db/schema");
     await db.update(users).set({ lastLoginAt: new Date() }).where(eq(users.id, user.id));
   }
-  await recordAudit({ actorId: user.id, action: "auth.login", entityType: "user", entityId: user.id, summary: "Signed in", ip: meta.ip });
+  await recordAudit({
+    actorId: user.id,
+    action: "auth.login",
+    entityType: "user",
+    entityId: user.id,
+    summary: "Signed in",
+    metadata: { userAgent: meta.userAgent },
+    ip: meta.ip,
+  });
   return issueSession(user, meta);
 }
 

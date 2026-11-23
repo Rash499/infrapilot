@@ -11,6 +11,21 @@ export interface NewRefreshTokenInput {
   ipAddress: string | null;
 }
 
+export type ActiveRefreshSession = Pick<
+  RefreshTokenDoc,
+  "id" | "familyId" | "userAgent" | "ipAddress" | "createdAt" | "expiresAt"
+>;
+
+const activeSessionProjection = {
+  _id: 0,
+  id: 1,
+  familyId: 1,
+  userAgent: 1,
+  ipAddress: 1,
+  createdAt: 1,
+  expiresAt: 1,
+} as const;
+
 export async function insertRefreshToken(
   input: NewRefreshTokenInput,
   session?: ClientSession,
@@ -38,6 +53,47 @@ export async function findRefreshTokenByHash(
 ): Promise<RefreshTokenDoc | null> {
   const col = await getCollection<RefreshTokenDoc>(collections.refreshTokens);
   return col.findOne({ tokenHash }, { session });
+}
+
+export async function listActiveRefreshSessions(
+  userId: string,
+  now = new Date(),
+): Promise<ActiveRefreshSession[]> {
+  const col = await getCollection<RefreshTokenDoc>(collections.refreshTokens);
+  const rows = await col
+    .find({ userId, revokedAt: null, expiresAt: { $gt: now } }, { projection: activeSessionProjection })
+    .sort({ createdAt: -1 })
+    .limit(50)
+    .toArray();
+  return rows.map(({ id, familyId, userAgent, ipAddress, createdAt, expiresAt }) => ({
+    id,
+    familyId,
+    userAgent,
+    ipAddress,
+    createdAt,
+    expiresAt,
+  }));
+}
+
+export async function findActiveRefreshSessionById(
+  userId: string,
+  id: string,
+  now = new Date(),
+): Promise<ActiveRefreshSession | null> {
+  const col = await getCollection<RefreshTokenDoc>(collections.refreshTokens);
+  const row = await col.findOne(
+    { userId, id, revokedAt: null, expiresAt: { $gt: now } },
+    { projection: activeSessionProjection },
+  );
+  if (!row) return null;
+  return {
+    id: row.id,
+    familyId: row.familyId,
+    userAgent: row.userAgent,
+    ipAddress: row.ipAddress,
+    createdAt: row.createdAt,
+    expiresAt: row.expiresAt,
+  };
 }
 
 export async function revokeRefreshTokenFamily(familyId: string, session?: ClientSession): Promise<void> {

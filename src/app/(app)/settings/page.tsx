@@ -3,14 +3,15 @@
 import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { Moon, Sun, UserCircle, KeyRound, Palette } from "lucide-react";
-import { Alert, Button, Card, Field, Input, PageHeader, StatusBadge, cn } from "@/components/ui";
+import { Alert, Button, Card, ConfirmDialog, EmptyState, ErrorState, Field, Input, PageHeader, Skeleton, StatusBadge, cn } from "@/components/ui";
 import { useAuth } from "@/context/auth-context";
 import { useTheme } from "@/context/theme-context";
 import { useToast } from "@/context/toast-context";
-import { getErrorMessage, sendData, validatePayload } from "@/lib/client/api";
-import { fmtDateTime } from "@/lib/format";
+import { fetchData, getErrorMessage, sendData, validatePayload } from "@/lib/client/api";
+import { useAsync } from "@/lib/client/use-async";
+import { fmtDateTime, fmtRelative } from "@/lib/format";
 import { changePasswordSchema, updateProfileSchema } from "@/validators/schemas";
-import type { SessionPayload } from "@/types/api";
+import type { AccountSession, SessionPayload } from "@/types/api";
 
 type PasswordValues = { currentPassword: string; newPassword: string; confirm: string };
 
@@ -20,6 +21,9 @@ export default function SettingsPage() {
   const toast = useToast();
   const [profileError, setProfileError] = useState<string | null>(null);
   const [passwordError, setPasswordError] = useState<string | null>(null);
+  const [sessionToRevoke, setSessionToRevoke] = useState<AccountSession | null>(null);
+  const [revokingSession, setRevokingSession] = useState(false);
+  const sessions = useAsync(() => fetchData<AccountSession[]>("/users/me/sessions"), []);
 
   const profile = useForm<{ name: string }>({ defaultValues: { name: user?.name ?? "" } });
   const password = useForm<PasswordValues>({ defaultValues: { currentPassword: "", newPassword: "", confirm: "" } });
@@ -60,6 +64,21 @@ export default function SettingsPage() {
       setPasswordError(getErrorMessage(err));
     }
   });
+
+  const revokeSession = async () => {
+    if (!sessionToRevoke) return;
+    setRevokingSession(true);
+    try {
+      await sendData("delete", `/users/me/sessions/${sessionToRevoke.id}`);
+      toast.success("Session revoked");
+      setSessionToRevoke(null);
+      sessions.reload();
+    } catch (err) {
+      toast.error(getErrorMessage(err));
+    } finally {
+      setRevokingSession(false);
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -124,6 +143,45 @@ export default function SettingsPage() {
       </div>
 
       <Card className="p-5">
+        <h2 className="text-sm font-semibold text-fg">Active sessions</h2>
+        <p className="mt-1 text-sm text-muted">Review devices signed in to your account. Showing up to 50 active sessions; revoking one signs that device out.</p>
+        {sessions.error && !sessions.data ? <ErrorState message={sessions.error} onRetry={sessions.reload} /> : null}
+        {!sessions.data && sessions.loading ? (
+          <div className="mt-4 space-y-3" aria-busy="true">
+            <Skeleton className="h-16" />
+            <Skeleton className="h-16" />
+          </div>
+        ) : null}
+        {sessions.data && sessions.data.length === 0 ? (
+          <EmptyState icon={UserCircle} title="No active sessions" description="Your current browser session may have expired." />
+        ) : null}
+        {sessions.data && sessions.data.length > 0 ? (
+          <ul className="mt-4 divide-y divide-line">
+            {sessions.data.map((session) => (
+              <li key={session.id} className="flex flex-wrap items-center gap-3 py-3 first:pt-0 last:pb-0">
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium text-fg">{session.userAgent ?? "Unknown device"}</p>
+                  <p className="text-xs text-muted">
+                    {session.ipAddress ?? "Unknown IP"} · Last refreshed {fmtRelative(session.createdAt)} · Expires {fmtDateTime(session.expiresAt)}
+                  </p>
+                </div>
+                {session.current ? <StatusBadge value="healthy" label="Current session" /> : null}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={session.current}
+                  aria-label={`Revoke session ${session.userAgent ?? session.id}`}
+                  onClick={() => setSessionToRevoke(session)}
+                >
+                  Revoke
+                </Button>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+      </Card>
+
+      <Card className="p-5">
         <h2 className="flex items-center gap-2 text-sm font-semibold text-fg">
           <Palette className="size-4 text-sky-500" aria-hidden="true" /> Appearance
         </h2>
@@ -142,6 +200,17 @@ export default function SettingsPage() {
           ))}
         </div>
       </Card>
+
+      <ConfirmDialog
+        open={!!sessionToRevoke}
+        title="Revoke this session?"
+        description="The selected device will need to sign in again. Your current session is not affected."
+        confirmLabel="Revoke session"
+        tone="danger"
+        busy={revokingSession}
+        onConfirm={() => void revokeSession()}
+        onCancel={() => setSessionToRevoke(null)}
+      />
     </div>
   );
 }

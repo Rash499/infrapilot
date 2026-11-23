@@ -8,6 +8,7 @@ import { getMongoClient, getMongoDb } from "@/db/mongo";
  */
 export const collections = {
   users: "users",
+  counters: "counters",
   refreshTokens: "refresh_tokens",
   passwordResetTokens: "password_reset_tokens",
   assets: "assets",
@@ -66,15 +67,16 @@ export async function withMongoTransaction<T>(
   const session = client.startSession();
 
   try {
-    let result: T | undefined;
+    let outcome: { value: T } | undefined;
     await session.withTransaction(async () => {
-      result = await operation(session);
-      return result;
+      const value = await operation(session);
+      outcome = { value };
+      return value;
     });
-    if (result === undefined) {
+    if (!outcome) {
       throw new Error("MongoDB transaction completed without producing a result");
     }
-    return result;
+    return outcome.value;
   } finally {
     await session.endSession();
   }

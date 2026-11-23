@@ -8,7 +8,10 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "db:init:mongo": "tsx src/db/init.ts",
+    "db:seed:mongo": "tsx src/db/seed-mongodb.ts",
+    "db:check:mongo": "tsx scripts/check-mongodb.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^7.0.7",

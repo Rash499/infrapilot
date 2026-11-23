@@ -2,6 +2,17 @@ import { and, asc, desc, eq, ilike, or, sql, type SQL } from "drizzle-orm";
 import type { z } from "zod";
 import { db } from "@/db";
 import { assets, findingEvents, securityFindings, users } from "@/db/schema";
+import type { FindingStatus, SecurityFindingDoc } from "@/db/models/documents";
+import { findAssetById, findAssetNamesByIds } from "@/db/repositories/assets.repository";
+import {
+  createSecurityFinding,
+  deleteSecurityFinding,
+  findSecurityFindingById,
+  listFindingEvents,
+  listSecurityFindings,
+  updateSecurityFinding,
+} from "@/db/repositories/findings.repository";
+import { findUserById } from "@/db/repositories/users.repository";
 import type { AuthUser } from "@/lib/auth";
 import { errors, paginationMeta } from "@/lib/http";
 import { notifyRoles, notifyUsers } from "@/services/notifications.service";
@@ -9,7 +20,7 @@ import { recordAudit } from "@/services/audit.service";
 import { diffFields, humanize, iso, likeTerm, pageOffset, userNameMap } from "@/services/common";
 import type { findingCreateSchema, findingListQuery, findingUpdateSchema } from "@/validators/schemas";
 
-type FindingRow = typeof securityFindings.$inferSelect;
+type FindingRow = typeof securityFindings.$inferSelect | SecurityFindingDoc;
 type CreateInput = z.infer<typeof findingCreateSchema>;
 type UpdateInput = z.infer<typeof findingUpdateSchema>;
 type ListQuery = z.infer<typeof findingListQuery>;
@@ -20,6 +31,11 @@ const severityRank = sql`case ${securityFindings.severity} when 'critical' then 
 
 async function assertActiveUser(userId: string | null | undefined): Promise<string | null> {
   if (!userId) return null;
+  if (process.env.MONGODB_URI) {
+    const user = await findUserById(userId);
+    if (!user?.isActive) throw errors.unprocessable("The selected user does not exist or is inactive");
+    return user.name;
+  }
   const [row] = await db.select({ id: users.id, name: users.name, isActive: users.isActive }).from(users).where(eq(users.id, userId)).limit(1);
   if (!row || !row.isActive) throw errors.unprocessable("The selected user does not exist or is inactive");
   return row.name;
@@ -27,6 +43,10 @@ async function assertActiveUser(userId: string | null | undefined): Promise<stri
 
 async function assertAsset(assetId: string | null | undefined): Promise<void> {
   if (!assetId) return;
+  if (process.env.MONGODB_URI) {
+    if (!(await findAssetById(assetId))) throw errors.unprocessable("The selected asset does not exist");
+    return;
+  }
   const [row] = await db.select({ id: assets.id }).from(assets).where(eq(assets.id, assetId)).limit(1);
   if (!row) throw errors.unprocessable("The selected asset does not exist");
 }
@@ -53,6 +73,24 @@ function toDto(row: FindingRow, names: { asset: string | null; assignee: string 
 }
 
 export async function listFindings(q: ListQuery) {
+  if (process.env.MONGODB_URI) {
+    const result = await listSecurityFindings(q);
+    const [assetsById, names] = await Promise.all([
+      findAssetNamesByIds(result.items.map((row) => row.assetId).filter((id): id is string => !!id)),
+      userNameMap(result.items.flatMap((row) => [row.assigneeId, row.createdById])),
+    ]);
+    const assetNames = new Map(assetsById.map((asset) => [asset.id, asset.name]));
+    return {
+      items: result.items.map((row) =>
+        toDto(row, {
+          asset: row.assetId ? assetNames.get(row.assetId) ?? null : null,
+          assignee: row.assigneeId ? names.get(row.assigneeId) ?? null : null,
+          creator: row.createdById ? names.get(row.createdById) ?? null : null,
+        }),
+      ),
+      pagination: paginationMeta(q.page, q.pageSize, result.total),
+    };
+  }
   const conditions: SQL[] = [];
   if (q.search) {
     const pattern = likeTerm(q.search);
@@ -98,6 +136,31 @@ export async function listFindings(q: ListQuery) {
 }
 
 export async function getFinding(id: string) {
+  if (process.env.MONGODB_URI) {
+    const finding = await findSecurityFindingById(id);
+    if (!finding) throw errors.notFound("Security finding");
+    const [assetsById, names, events] = await Promise.all([
+      findAssetNamesByIds(finding.assetId ? [finding.assetId] : []),
+      userNameMap([finding.assigneeId, finding.createdById]),
+      listFindingEvents(id),
+    ]);
+    const eventNames = await userNameMap(events.map((event) => event.actorId));
+    return {
+      ...toDto(finding, {
+        asset: assetsById[0]?.name ?? null,
+        assignee: finding.assigneeId ? names.get(finding.assigneeId) ?? null : null,
+        creator: finding.createdById ? names.get(finding.createdById) ?? null : null,
+      }),
+      history: events.map((event) => ({
+        id: event.id,
+        fromStatus: event.fromStatus,
+        toStatus: event.toStatus,
+        note: event.note,
+        actorName: event.actorId ? eventNames.get(event.actorId) ?? "System" : "System",
+        createdAt: event.createdAt.toISOString(),
+      })),
+    };
+  }
   const [row] = await db
     .select({ finding: securityFindings, assetName: assets.name })
     .from(securityFindings)
@@ -133,8 +196,19 @@ export async function getFinding(id: string) {
 
 export async function createFinding(actor: AuthUser, input: CreateInput, ip: string) {
   await assertAsset(input.assetId);
-  const assigneeName = await assertActiveUser(input.assigneeId);
-  const [row] = await db
+  await assertActiveUser(input.assigneeId);
+  const row = process.env.MONGODB_URI
+    ? await createSecurityFinding({
+        title: input.title,
+        description: input.description,
+        severity: input.severity,
+        assetId: input.assetId,
+        assigneeId: input.assigneeId,
+        remediation: input.remediation,
+        cveId: input.cveId,
+        createdById: actor.id,
+      }, actor.id)
+    : (await db
     .insert(securityFindings)
     .values({
       title: input.title,
@@ -147,16 +221,18 @@ export async function createFinding(actor: AuthUser, input: CreateInput, ip: str
       cveId: input.cveId,
       createdById: actor.id,
     })
-    .returning();
+    .returning())[0] ?? null;
   if (!row) throw errors.badRequest("Finding could not be created");
 
-  await db.insert(findingEvents).values({
-    findingId: row.id,
-    actorId: actor.id,
-    fromStatus: null,
-    toStatus: "open",
-    note: "Finding recorded",
-  });
+  if (!process.env.MONGODB_URI) {
+    await db.insert(findingEvents).values({
+      findingId: row.id,
+      actorId: actor.id,
+      fromStatus: null,
+      toStatus: "open",
+      note: "Finding recorded",
+    });
+  }
 
   if (row.severity === "critical") {
     await notifyRoles(
@@ -190,7 +266,9 @@ export async function createFinding(actor: AuthUser, input: CreateInput, ip: str
 }
 
 export async function updateFinding(actor: AuthUser, id: string, input: UpdateInput, ip: string) {
-  const [before] = await db.select().from(securityFindings).where(eq(securityFindings.id, id)).limit(1);
+  const before = process.env.MONGODB_URI
+    ? await findSecurityFindingById(id)
+    : (await db.select().from(securityFindings).where(eq(securityFindings.id, id)).limit(1))[0] ?? null;
   if (!before) throw errors.notFound("Security finding");
 
   const statusChanged = input.status !== undefined && input.status !== before.status;
@@ -202,24 +280,23 @@ export async function updateFinding(actor: AuthUser, id: string, input: UpdateIn
   const assigneeName = assigneeChanged ? await assertActiveUser(input.assigneeId) : null;
 
   const now = new Date();
-  const patch: Partial<typeof securityFindings.$inferInsert> = { updatedAt: now };
-  if (input.title !== undefined) patch.title = input.title;
-  if (input.description !== undefined) patch.description = input.description;
-  if (input.severity !== undefined) patch.severity = input.severity;
-  if (input.assetId !== undefined) patch.assetId = input.assetId;
-  if (input.assigneeId !== undefined) patch.assigneeId = input.assigneeId;
-  if (input.remediation !== undefined) patch.remediation = input.remediation;
-  if (input.cveId !== undefined) patch.cveId = input.cveId;
-  if (statusChanged && input.status) {
-    patch.status = input.status;
-    patch.resolvedAt = input.status === "resolved" ? now : null;
-  }
-
-  await db.transaction(async (tx) => {
-    await tx.update(securityFindings).set(patch).where(eq(securityFindings.id, id));
+  let after: FindingRow | null;
+  if (process.env.MONGODB_URI) {
+    const patch: Partial<Pick<SecurityFindingDoc, "title" | "description" | "severity" | "assetId" | "assigneeId" | "remediation" | "cveId" | "status" | "resolvedAt">> = {};
+    if (input.title !== undefined) patch.title = input.title;
+    if (input.description !== undefined) patch.description = input.description;
+    if (input.severity !== undefined) patch.severity = input.severity;
+    if (input.assetId !== undefined) patch.assetId = input.assetId;
+    if (input.assigneeId !== undefined) patch.assigneeId = input.assigneeId;
+    if (input.remediation !== undefined) patch.remediation = input.remediation;
+    if (input.cveId !== undefined) patch.cveId = input.cveId;
     if (statusChanged && input.status) {
-      await tx.insert(findingEvents).values({
-        findingId: id,
+      patch.status = input.status;
+      patch.resolvedAt = input.status === "resolved" ? now : null;
+    }
+    const eventsToAdd = [];
+    if (statusChanged && input.status) {
+      eventsToAdd.push({
         actorId: actor.id,
         fromStatus: before.status,
         toStatus: input.status,
@@ -227,26 +304,62 @@ export async function updateFinding(actor: AuthUser, id: string, input: UpdateIn
       });
     }
     if (assigneeChanged) {
-      await tx.insert(findingEvents).values({
-        findingId: id,
+      eventsToAdd.push({
         actorId: actor.id,
         fromStatus: null,
         toStatus: null,
-        note: assigneeName ? `Assigned to ${assigneeName}` : "Unassigned",
+        note: input.assigneeId ? `Assigned to ${assigneeName}` : "Unassigned",
       });
     }
     if (!statusChanged && !assigneeChanged && input.note) {
-      await tx.insert(findingEvents).values({
-        findingId: id,
-        actorId: actor.id,
-        fromStatus: null,
-        toStatus: null,
-        note: input.note,
-      });
+      eventsToAdd.push({ actorId: actor.id, fromStatus: null, toStatus: null, note: input.note });
     }
-  });
-
-  const [after] = await db.select().from(securityFindings).where(eq(securityFindings.id, id)).limit(1);
+    after = await updateSecurityFinding(id, patch, eventsToAdd);
+  } else {
+    const patch: Partial<typeof securityFindings.$inferInsert> = { updatedAt: now };
+    if (input.title !== undefined) patch.title = input.title;
+    if (input.description !== undefined) patch.description = input.description;
+    if (input.severity !== undefined) patch.severity = input.severity;
+    if (input.assetId !== undefined) patch.assetId = input.assetId;
+    if (input.assigneeId !== undefined) patch.assigneeId = input.assigneeId;
+    if (input.remediation !== undefined) patch.remediation = input.remediation;
+    if (input.cveId !== undefined) patch.cveId = input.cveId;
+    if (statusChanged && input.status) {
+      patch.status = input.status;
+      patch.resolvedAt = input.status === "resolved" ? now : null;
+    }
+    await db.transaction(async (tx) => {
+      await tx.update(securityFindings).set(patch).where(eq(securityFindings.id, id));
+      if (statusChanged && input.status) {
+        await tx.insert(findingEvents).values({
+          findingId: id,
+          actorId: actor.id,
+          fromStatus: before.status,
+          toStatus: input.status,
+          note: input.note || `Status changed from ${humanize(before.status)} to ${humanize(input.status)}`,
+        });
+      }
+      if (assigneeChanged) {
+        await tx.insert(findingEvents).values({
+          findingId: id,
+          actorId: actor.id,
+          fromStatus: null,
+          toStatus: null,
+          note: assigneeName ? `Assigned to ${assigneeName}` : "Unassigned",
+        });
+      }
+      if (!statusChanged && !assigneeChanged && input.note) {
+        await tx.insert(findingEvents).values({
+          findingId: id,
+          actorId: actor.id,
+          fromStatus: null,
+          toStatus: null,
+          note: input.note,
+        });
+      }
+    });
+    after = (await db.select().from(securityFindings).where(eq(securityFindings.id, id)).limit(1))[0] ?? null;
+  }
   if (!after) throw errors.notFound("Security finding");
 
   if (assigneeChanged && input.assigneeId && input.assigneeId !== actor.id) {
@@ -280,7 +393,9 @@ export async function updateFinding(actor: AuthUser, id: string, input: UpdateIn
 }
 
 export async function deleteFinding(actor: AuthUser, id: string, ip: string): Promise<void> {
-  const [row] = await db.delete(securityFindings).where(eq(securityFindings.id, id)).returning({ title: securityFindings.title });
+  const row = process.env.MONGODB_URI
+    ? await deleteSecurityFinding(id)
+    : (await db.delete(securityFindings).where(eq(securityFindings.id, id)).returning({ title: securityFindings.title }))[0] ?? null;
   if (!row) throw errors.notFound("Security finding");
   await recordAudit({
     actorId: actor.id,

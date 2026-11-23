@@ -2,6 +2,18 @@ import { and, asc, desc, eq, notInArray, ilike, inArray, sql, type SQL } from "d
 import type { z } from "zod";
 import { db } from "@/db";
 import { assets, incidentAssets, incidentComments, incidents, users } from "@/db/schema";
+import type { IncidentDoc } from "@/db/models/documents";
+import {
+  createIncident as createMongoIncident,
+  findIncidentById,
+  getIncidentStats,
+  insertIncidentComment,
+  listIncidentAssets,
+  listIncidentComments,
+  listIncidents as listMongoIncidents,
+  updateIncident as updateMongoIncident,
+} from "@/db/repositories/incidents.repository";
+import { findUserById } from "@/db/repositories/users.repository";
 import type { AuthUser } from "@/lib/auth";
 import { errors, paginationMeta } from "@/lib/http";
 import { recordAudit } from "@/services/audit.service";
@@ -10,7 +22,7 @@ import { humanize, iso, likeTerm, pageOffset, userNameMap } from "@/services/com
 import { notifyUsers } from "@/services/notifications.service";
 import type { commentSchema, incidentCreateSchema, incidentListQuery, incidentUpdateSchema } from "@/validators/schemas";
 
-type IncidentRow = typeof incidents.$inferSelect;
+type IncidentRow = typeof incidents.$inferSelect | IncidentDoc;
 type CreateInput = z.infer<typeof incidentCreateSchema>;
 type UpdateInput = z.infer<typeof incidentUpdateSchema>;
 type ListQuery = z.infer<typeof incidentListQuery>;
@@ -27,6 +39,11 @@ const severityRank = sql`case ${incidents.severity} when 'critical' then 0 when 
 
 async function assertActiveUser(userId: string | null | undefined): Promise<string | null> {
   if (!userId) return null;
+  if (process.env.MONGODB_URI) {
+    const user = await findUserById(userId);
+    if (!user?.isActive) throw errors.unprocessable("The selected assignee does not exist or is inactive");
+    return user.name;
+  }
   const [row] = await db.select({ name: users.name, isActive: users.isActive }).from(users).where(eq(users.id, userId)).limit(1);
   if (!row || !row.isActive) throw errors.unprocessable("The selected assignee does not exist or is inactive");
   return row.name;
@@ -57,6 +74,14 @@ function toDto(row: IncidentRow, names: Map<string, string>) {
 }
 
 export async function listIncidents(q: ListQuery) {
+  if (process.env.MONGODB_URI) {
+    const result = await listMongoIncidents(q);
+    const names = await userNameMap(result.items.flatMap((row) => [row.assigneeId, row.reporterId]));
+    return {
+      items: result.items.map((row) => toDto(row, names)),
+      pagination: paginationMeta(q.page, q.pageSize, result.total),
+    };
+  }
   const conditions: SQL[] = [];
   if (q.search) conditions.push(ilike(incidents.title, likeTerm(q.search)));
   if (q.status) conditions.push(eq(incidents.status, q.status));
@@ -94,6 +119,28 @@ export async function listIncidents(q: ListQuery) {
 }
 
 export async function getIncident(id: string) {
+  if (process.env.MONGODB_URI) {
+    const row = await findIncidentById(id);
+    if (!row) throw errors.notFound("Incident");
+    const [names, affected, comments] = await Promise.all([
+      userNameMap([row.assigneeId, row.reporterId]),
+      listIncidentAssets(id),
+      listIncidentComments(id),
+    ]);
+    const authors = await userNameMap(comments.map((comment) => comment.authorId));
+    return {
+      ...toDto(row, names),
+      assets: affected,
+      timeline: comments.map((comment) => ({
+        id: comment.id,
+        kind: comment.kind,
+        body: comment.body,
+        authorId: comment.authorId,
+        authorName: comment.authorId ? authors.get(comment.authorId) ?? "System" : "System",
+        createdAt: comment.createdAt.toISOString(),
+      })),
+    };
+  }
   const [row] = await db.select().from(incidents).where(eq(incidents.id, id)).limit(1);
   if (!row) throw errors.notFound("Incident");
   const names = await userNameMap([row.assigneeId, row.reporterId]);
@@ -130,7 +177,15 @@ export async function createIncident(actor: AuthUser, input: CreateInput, ip: st
   const assigneeName = await assertActiveUser(input.assigneeId);
   await assertAssetsExist(input.assetIds);
 
-  const created = await db.transaction(async (tx) => {
+  const created = process.env.MONGODB_URI
+    ? await createMongoIncident({
+        title: input.title,
+        description: input.description,
+        severity: input.severity,
+        priority: input.priority,
+        assigneeId: input.assigneeId,
+      }, actor.id, actor.name, input.assetIds)
+    : await db.transaction(async (tx) => {
     const [row] = await tx
       .insert(incidents)
       .values({
@@ -176,7 +231,9 @@ export async function createIncident(actor: AuthUser, input: CreateInput, ip: st
 }
 
 export async function updateIncident(actor: AuthUser, id: string, input: UpdateInput, ip: string) {
-  const [before] = await db.select().from(incidents).where(eq(incidents.id, id)).limit(1);
+  const before = process.env.MONGODB_URI
+    ? await findIncidentById(id)
+    : (await db.select().from(incidents).where(eq(incidents.id, id)).limit(1))[0] ?? null;
   if (!before) throw errors.notFound("Incident");
 
   const nextStatus = input.status ?? before.status;
@@ -190,7 +247,7 @@ export async function updateIncident(actor: AuthUser, id: string, input: UpdateI
   if (input.assetIds) await assertAssetsExist(input.assetIds);
 
   const now = new Date();
-  const patch: Partial<typeof incidents.$inferInsert> = { updatedAt: now };
+  const patch: Partial<Pick<IncidentDoc, "title" | "description" | "severity" | "priority" | "assigneeId" | "rootCause" | "resolution" | "status" | "resolvedAt" | "closedAt">> = {};
   if (input.title !== undefined) patch.title = input.title;
   if (input.description !== undefined) patch.description = input.description;
   if (input.severity !== undefined) patch.severity = input.severity;
@@ -204,30 +261,39 @@ export async function updateIncident(actor: AuthUser, id: string, input: UpdateI
     patch.closedAt = nextStatus === "closed" ? now : null;
   }
 
-  await db.transaction(async (tx) => {
-    await tx.update(incidents).set(patch).where(eq(incidents.id, id));
-    if (input.assetIds) {
-      await tx.delete(incidentAssets).where(eq(incidentAssets.incidentId, id));
-      if (input.assetIds.length > 0) {
-        await tx.insert(incidentAssets).values(input.assetIds.map((assetId) => ({ incidentId: id, assetId })));
-      }
-    }
-    const lines: string[] = [];
-    if (statusChanged) lines.push(`Status changed from ${humanize(before.status)} to ${humanize(nextStatus)}`);
-    if (assigneeChanged) lines.push(assigneeName ? `Assigned to ${assigneeName}` : "Unassigned");
-    if (input.severity !== undefined && input.severity !== before.severity) lines.push(`Severity changed to ${humanize(input.severity)}`);
-    if (input.priority !== undefined && input.priority !== before.priority) lines.push(`Priority changed to ${input.priority.toUpperCase()}`);
-    if (input.assetIds) lines.push("Affected assets updated");
-    if (input.rootCause !== undefined && input.rootCause !== before.rootCause) lines.push("Root cause recorded");
-    if (input.resolution !== undefined && input.resolution !== before.resolution) lines.push("Resolution documented");
-    if (lines.length > 0) {
-      await tx.insert(incidentComments).values(
-        lines.map((line) => ({ incidentId: id, authorId: actor.id, kind: "system" as const, body: `${line} by ${actor.name}` })),
-      );
-    }
-  });
+  const lines: string[] = [];
+  if (statusChanged) lines.push(`Status changed from ${humanize(before.status)} to ${humanize(nextStatus)}`);
+  if (assigneeChanged) lines.push(assigneeName ? `Assigned to ${assigneeName}` : "Unassigned");
+  if (input.severity !== undefined && input.severity !== before.severity) lines.push(`Severity changed to ${humanize(input.severity)}`);
+  if (input.priority !== undefined && input.priority !== before.priority) lines.push(`Priority changed to ${input.priority.toUpperCase()}`);
+  if (input.assetIds) lines.push("Affected assets updated");
+  if (input.rootCause !== undefined && input.rootCause !== before.rootCause) lines.push("Root cause recorded");
+  if (input.resolution !== undefined && input.resolution !== before.resolution) lines.push("Resolution documented");
 
-  const [after] = await db.select().from(incidents).where(eq(incidents.id, id)).limit(1);
+  const after = process.env.MONGODB_URI
+    ? await updateMongoIncident(
+        id,
+        patch,
+        input.assetIds,
+        lines.map((line) => ({ authorId: actor.id, kind: "system", body: `${line} by ${actor.name}` })),
+      )
+    : await (async () => {
+        await db.transaction(async (tx) => {
+          await tx.update(incidents).set({ ...patch, updatedAt: now }).where(eq(incidents.id, id));
+          if (input.assetIds) {
+            await tx.delete(incidentAssets).where(eq(incidentAssets.incidentId, id));
+            if (input.assetIds.length > 0) {
+              await tx.insert(incidentAssets).values(input.assetIds.map((assetId) => ({ incidentId: id, assetId })));
+            }
+          }
+          if (lines.length > 0) {
+            await tx.insert(incidentComments).values(
+              lines.map((line) => ({ incidentId: id, authorId: actor.id, kind: "system" as const, body: `${line} by ${actor.name}` })),
+            );
+          }
+        });
+        return (await db.select().from(incidents).where(eq(incidents.id, id)).limit(1))[0] ?? null;
+      })();
   if (!after) throw errors.notFound("Incident");
   const link = `/incidents/${id}`;
   if (assigneeChanged && after.assigneeId && after.assigneeId !== actor.id) {
@@ -261,12 +327,16 @@ export async function updateIncident(actor: AuthUser, id: string, input: UpdateI
 }
 
 export async function addIncidentComment(actor: AuthUser, id: string, body: z.infer<typeof commentSchema>["body"], ip: string) {
-  const [incident] = await db.select().from(incidents).where(eq(incidents.id, id)).limit(1);
+  const incident = process.env.MONGODB_URI
+    ? await findIncidentById(id)
+    : (await db.select().from(incidents).where(eq(incidents.id, id)).limit(1))[0] ?? null;
   if (!incident) throw errors.notFound("Incident");
-  const [comment] = await db
-    .insert(incidentComments)
-    .values({ incidentId: id, authorId: actor.id, kind: "comment", body })
-    .returning();
+  const comment = process.env.MONGODB_URI
+    ? await insertIncidentComment(id, { authorId: actor.id, kind: "comment", body })
+    : (await db
+        .insert(incidentComments)
+        .values({ incidentId: id, authorId: actor.id, kind: "comment", body })
+        .returning())[0] ?? null;
   if (!comment) throw errors.badRequest("Comment could not be saved");
 
   await notifyUsers([incident.assigneeId, incident.reporterId].filter((v): v is string => !!v && v !== actor.id), {
@@ -295,6 +365,29 @@ export async function addIncidentComment(actor: AuthUser, id: string, body: z.in
 
 export async function incidentStats(days: number) {
   const since = new Date(Date.now() - days * DAY_MS);
+  if (process.env.MONGODB_URI) {
+    const stats = await getIncidentStats(since);
+    const severities = ["critical", "high", "medium", "low"] as const;
+    const statuses = ["open", "investigating", "in_progress", "resolved", "closed"] as const;
+    return {
+      days,
+      total: stats.total,
+      bySeverity: severities.map((severity) => ({
+        severity,
+        count: stats.bySeverity.find((row) => row._id === severity)?.count ?? 0,
+      })),
+      byStatus: statuses.map((status) => ({
+        status,
+        count: stats.byStatus.find((row) => row._id === status)?.count ?? 0,
+      })),
+      openedByDay: stats.openedByDay.map((row) => ({ day: row._id, count: row.count })),
+      meanTimeToResolveHours:
+        stats.meanTimeToResolveHours !== null ? Math.round(stats.meanTimeToResolveHours * 10) / 10 : null,
+      activeCount: stats.byStatus
+        .filter((row) => (ACTIVE_STATUSES as readonly string[]).includes(row._id))
+        .reduce((total, row) => total + row.count, 0),
+    };
+  }
   const dayExpr = sql<string>`to_char(date_trunc('day', ${incidents.openedAt}), 'YYYY-MM-DD')`;
 
   const [bySeverity, byStatus, byDay, [mttr], [{ total }]] = await Promise.all([

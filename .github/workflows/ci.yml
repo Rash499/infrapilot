@@ -13,7 +13,6 @@ jobs:
     name: Install, lint, type-check, unit tests, build
     runs-on: ubuntu-latest
     env:
-      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/app_db
       JWT_ACCESS_SECRET: ci-only-access-secret-value-0123456789abcdef
     steps:
       - uses: actions/checkout@v4
@@ -21,7 +20,7 @@ jobs:
         with:
           node-version: 22
       - name: Install dependencies
-        run: npm install --include=dev --no-audit --no-fund
+        run: npm ci --include=dev --no-audit --no-fund
       - name: Lint
         run: npm run lint
       - name: Type generation and type check
@@ -37,18 +36,9 @@ jobs:
     name: End-to-end (Playwright)
     needs: quality
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: app_db
-        ports: ["5432:5432"]
-        options: >-
-          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
     env:
-      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/app_db
+      MONGODB_URI: mongodb://127.0.0.1:27017/infrapilot?replicaSet=rs0
+      MONGODB_DB: infrapilot
       JWT_ACCESS_SECRET: ci-only-access-secret-value-0123456789abcdef
       SEED_PASSWORD: CiSeed-Password-2026
       E2E_ADMIN_EMAIL: admin@infrapilot.local
@@ -60,9 +50,34 @@ jobs:
         with:
           node-version: 22
       - name: Install dependencies
-        run: npm install --include=dev --no-audit --no-fund
-      - run: npx drizzle-kit migrate
-      - run: npx tsx src/db/seed.ts
+        run: npm ci --include=dev --no-audit --no-fund
+      - name: Start MongoDB replica set
+        run: |
+          docker run --detach --name infrapilot-mongo --publish 27017:27017 mongo:8.0 mongod --replSet rs0 --bind_ip_all
+          ready=false
+          for attempt in {1..30}; do
+            if docker exec infrapilot-mongo mongosh --quiet --eval "db.adminCommand('ping').ok" | grep -q 1; then
+              ready=true
+              break
+            fi
+            sleep 2
+          done
+          if [[ "$ready" != true ]]; then
+            docker logs infrapilot-mongo
+            echo "MongoDB did not start" >&2
+            exit 1
+          fi
+          docker exec infrapilot-mongo mongosh --quiet --eval "rs.initiate({_id:'rs0',members:[{_id:0,host:'127.0.0.1:27017'}]})"
+          for attempt in {1..30}; do
+            if docker exec infrapilot-mongo mongosh --quiet --eval "db.hello().isWritablePrimary" | grep -q true; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "MongoDB replica set did not elect a primary" >&2
+          exit 1
+      - run: npm run db:init:mongo
+      - run: npm run db:seed:mongo
       - run: npm run build
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e

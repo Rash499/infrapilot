@@ -2,6 +2,20 @@ import { and, asc, desc, eq, gte, ilike, inArray, or, sql, type SQL } from "driz
 import type { z } from "zod";
 import { db } from "@/db";
 import { assets, monitoringResults, monitoringTargets } from "@/db/schema";
+import type { MonitoringTargetDoc } from "@/db/models/documents";
+import {
+  deleteMonitoringTargetById,
+  findMonitoringTargetById,
+  getMonitoringResultSummary,
+  getMonitoringTargetCounts,
+  getMonitoringUptime,
+  insertMonitoringTarget,
+  listMonitoringResults,
+  listMonitoringTargets,
+  listMonitoringTargetsForOverview,
+  updateMonitoringTargetById,
+} from "@/db/repositories/monitoring.repository";
+import { findAssetById, findAssetNamesByIds } from "@/db/repositories/assets.repository";
 import type { AuthUser } from "@/lib/auth";
 import { errors, paginationMeta } from "@/lib/http";
 import { DestinationError, assertSafeDestination, parseMonitorUrl, validatePort } from "@/lib/ssrf";
@@ -9,7 +23,7 @@ import { recordAudit } from "@/services/audit.service";
 import { iso, likeTerm, pageOffset } from "@/services/common";
 import type { monitorCreateSchema, monitorListQuery, monitorUpdateSchema } from "@/validators/schemas";
 
-type TargetRow = typeof monitoringTargets.$inferSelect;
+type TargetRow = typeof monitoringTargets.$inferSelect | MonitoringTargetDoc;
 type CreateInput = z.infer<typeof monitorCreateSchema>;
 type UpdateInput = z.infer<typeof monitorUpdateSchema>;
 type ListQuery = z.infer<typeof monitorListQuery>;
@@ -57,6 +71,10 @@ function assertPrivateOverride(actor: AuthUser, requested: boolean | undefined, 
 
 async function assertAssetExists(assetId: string | null | undefined): Promise<void> {
   if (!assetId) return;
+  if (process.env.MONGODB_URI) {
+    if (!(await findAssetById(assetId))) throw errors.unprocessable("The selected asset does not exist");
+    return;
+  }
   const [row] = await db.select({ id: assets.id }).from(assets).where(eq(assets.id, assetId)).limit(1);
   if (!row) throw errors.unprocessable("The selected asset does not exist");
 }
@@ -68,6 +86,7 @@ interface UptimeAgg {
 }
 
 async function uptimeFor(targetIds: string[], since: Date): Promise<Map<string, UptimeAgg>> {
+  if (process.env.MONGODB_URI) return getMonitoringUptime(targetIds, since);
   const map = new Map<string, UptimeAgg>();
   if (targetIds.length === 0) return map;
   const rows = await db
@@ -118,6 +137,26 @@ function toDto(row: TargetRow, assetName: string | null, uptime24h: number | nul
 }
 
 export async function listTargets(q: ListQuery) {
+  if (process.env.MONGODB_URI) {
+    const result = await listMonitoringTargets({
+      page: q.page,
+      pageSize: q.pageSize,
+      search: q.search,
+      status: q.state,
+      monitorType: q.monitorType,
+      sort: q.sort,
+      order: q.order,
+    });
+    const [names, uptime] = await Promise.all([
+      findAssetNamesByIds(result.items.map((row) => row.assetId).filter((id): id is string => !!id)),
+      uptimeFor(result.items.map((row) => row.id), new Date(Date.now() - 24 * HOUR)),
+    ]);
+    const assetNames = new Map(names.map((asset) => [asset.id, asset.name]));
+    return {
+      items: result.items.map((row) => toDto(row, row.assetId ? assetNames.get(row.assetId) ?? null : null, pct(uptime.get(row.id)))),
+      pagination: paginationMeta(q.page, q.pageSize, result.total),
+    };
+  }
   const conditions: SQL[] = [];
   if (q.search) {
     const pattern = likeTerm(q.search);
@@ -158,6 +197,12 @@ export async function listTargets(q: ListQuery) {
 }
 
 async function loadTarget(id: string) {
+  if (process.env.MONGODB_URI) {
+    const target = await findMonitoringTargetById(id);
+    if (!target) throw errors.notFound("Monitoring target");
+    const names = await findAssetNamesByIds(target.assetId ? [target.assetId] : []);
+    return { target, assetName: names[0]?.name ?? null };
+  }
   const [row] = await db
     .select({ target: monitoringTargets, assetName: assets.name })
     .from(monitoringTargets)
@@ -176,12 +221,14 @@ export async function getTarget(id: string) {
     uptimeFor([id], new Date(now - rangeMs["7d"])),
     uptimeFor([id], new Date(now - rangeMs["30d"])),
   ]);
-  const recent = await db
-    .select()
-    .from(monitoringResults)
-    .where(eq(monitoringResults.targetId, id))
-    .orderBy(desc(monitoringResults.checkedAt))
-    .limit(30);
+  const recent = process.env.MONGODB_URI
+    ? (await listMonitoringResults(id, { since: new Date(0), page: 1, pageSize: 30 })).items
+    : await db
+        .select()
+        .from(monitoringResults)
+        .where(eq(monitoringResults.targetId, id))
+        .orderBy(desc(monitoringResults.checkedAt))
+        .limit(30);
   return {
     ...toDto(target, assetName ?? null, pct(u24.get(id))),
     stats: {
@@ -207,6 +254,42 @@ export async function createTarget(actor: AuthUser, input: CreateInput, ip: stri
   assertPrivateOverride(actor, input.allowPrivateNetwork, false);
   await assertAssetExists(input.assetId);
   const config = await normalizeConfig({ ...input, allowPrivateNetwork: input.allowPrivateNetwork });
+  if (process.env.MONGODB_URI) {
+    const row = await insertMonitoringTarget({
+      name: input.name,
+      monitorType: input.monitorType,
+      url: config.url,
+      host: config.host,
+      port: config.port,
+      expectedStatusCode: input.expectedStatusCode ?? null,
+      intervalSeconds: input.intervalSeconds,
+      timeoutMs: input.timeoutMs,
+      degradedThresholdMs: input.degradedThresholdMs,
+      enabled: input.enabled,
+      allowPrivateNetwork: input.allowPrivateNetwork,
+      assetId: input.assetId,
+      createdById: actor.id,
+    });
+    await recordAudit({
+      actorId: actor.id,
+      action: "monitoring_target.created",
+      entityType: "monitoring_target",
+      entityId: row.id,
+      summary: `Monitoring target "${row.name}" created (${row.monitorType})`,
+      ip,
+    });
+    if (row.assetId) {
+      await recordAudit({
+        actorId: actor.id,
+        action: "asset.monitoring_linked",
+        entityType: "asset",
+        entityId: row.assetId,
+        summary: `Monitoring target "${row.name}" linked to asset`,
+        ip,
+      });
+    }
+    return getTarget(row.id);
+  }
   const [row] = await db
     .insert(monitoringTargets)
     .values({
@@ -260,6 +343,33 @@ export async function updateTarget(actor: AuthUser, id: string, input: UpdateInp
     allowPrivateNetwork,
   });
 
+  if (process.env.MONGODB_URI) {
+    const row = await updateMonitoringTargetById(id, {
+      name: input.name ?? existing.name,
+      monitorType,
+      url: config.url,
+      host: config.host,
+      port: config.port,
+      expectedStatusCode: input.expectedStatusCode !== undefined ? input.expectedStatusCode ?? null : existing.expectedStatusCode,
+      intervalSeconds: input.intervalSeconds ?? existing.intervalSeconds,
+      timeoutMs: input.timeoutMs ?? existing.timeoutMs,
+      degradedThresholdMs: input.degradedThresholdMs ?? existing.degradedThresholdMs,
+      enabled: input.enabled ?? existing.enabled,
+      allowPrivateNetwork,
+      assetId: input.assetId !== undefined ? input.assetId : existing.assetId,
+    });
+    if (!row) throw errors.notFound("Monitoring target");
+    await recordAudit({
+      actorId: actor.id,
+      action: "monitoring_target.updated",
+      entityType: "monitoring_target",
+      entityId: id,
+      summary: `Monitoring target "${row.name}" updated`,
+      ip,
+    });
+    return getTarget(id);
+  }
+
   const [row] = await db
     .update(monitoringTargets)
     .set({
@@ -293,6 +403,19 @@ export async function updateTarget(actor: AuthUser, id: string, input: UpdateInp
 }
 
 export async function deleteTarget(actor: AuthUser, id: string, ip: string): Promise<void> {
+  if (process.env.MONGODB_URI) {
+    const row = await deleteMonitoringTargetById(id);
+    if (!row) throw errors.notFound("Monitoring target");
+    await recordAudit({
+      actorId: actor.id,
+      action: "monitoring_target.deleted",
+      entityType: "monitoring_target",
+      entityId: id,
+      summary: `Monitoring target "${row.name}" deleted`,
+      ip,
+    });
+    return;
+  }
   const [row] = await db.delete(monitoringTargets).where(eq(monitoringTargets.id, id)).returning({ name: monitoringTargets.name });
   if (!row) throw errors.notFound("Monitoring target");
   await recordAudit({
@@ -309,6 +432,18 @@ export async function queueCheck(actor: AuthUser, id: string, ip: string) {
   const { target } = await loadTarget(id);
   if (!target.enabled) throw errors.unprocessable("Enable this monitoring target before running a check");
   const now = new Date();
+  if (process.env.MONGODB_URI) {
+    await updateMonitoringTargetById(id, { nextCheckAt: now });
+    await recordAudit({
+      actorId: actor.id,
+      action: "monitoring_target.check_queued",
+      entityType: "monitoring_target",
+      entityId: id,
+      summary: `On-demand check queued for "${target.name}"`,
+      ip,
+    });
+    return { queued: true, queuedAt: now.toISOString() };
+  }
   await db.update(monitoringTargets).set({ nextCheckAt: now }).where(eq(monitoringTargets.id, id));
   await recordAudit({
     actorId: actor.id,
@@ -324,6 +459,21 @@ export async function queueCheck(actor: AuthUser, id: string, ip: string) {
 export async function listResults(targetId: string, q: { page: number; pageSize: number; range: keyof typeof rangeMs }) {
   await loadTarget(targetId);
   const since = new Date(Date.now() - rangeMs[q.range]);
+  if (process.env.MONGODB_URI) {
+    const result = await listMonitoringResults(targetId, { since, page: q.page, pageSize: q.pageSize });
+    return {
+      items: result.items.map((row) => ({
+        id: row.id,
+        checkedAt: row.checkedAt.toISOString(),
+        success: row.success,
+        state: row.state,
+        responseTimeMs: row.responseTimeMs,
+        statusCode: row.statusCode,
+        errorMessage: row.errorMessage,
+      })),
+      pagination: paginationMeta(q.page, q.pageSize, result.total),
+    };
+  }
   const where = and(eq(monitoringResults.targetId, targetId), gte(monitoringResults.checkedAt, since));
   const rows = await db
     .select()
@@ -348,6 +498,35 @@ export async function listResults(targetId: string, q: { page: number; pageSize:
 }
 
 export async function monitoringOverview() {
+  if (process.env.MONGODB_URI) {
+    const counts = await getMonitoringTargetCounts();
+    const summary = { total: 0, healthy: 0, degraded: 0, unavailable: 0, unknown: 0, paused: 0 };
+    for (const row of counts) {
+      summary.total += row.total;
+      if (!row.enabled) {
+        summary.paused += row.total;
+        continue;
+      }
+      summary[row.status] += row.total;
+    }
+    const since24 = new Date(Date.now() - 24 * HOUR);
+    const [agg, targets] = await Promise.all([
+      getMonitoringResultSummary(since24),
+      listMonitoringTargetsForOverview(200),
+    ]);
+    const [names, uptime] = await Promise.all([
+      findAssetNamesByIds(targets.map((row) => row.assetId).filter((id): id is string => !!id)),
+      uptimeFor(targets.map((row) => row.id), since24),
+    ]);
+    const assetNames = new Map(names.map((asset) => [asset.id, asset.name]));
+    return {
+      summary,
+      uptime24hPct: agg.total > 0 ? Math.round((agg.ok / agg.total) * 10000) / 100 : null,
+      avgResponse24hMs: agg.avgMs ? Math.round(agg.avgMs) : null,
+      checks24h: agg.total,
+      services: targets.map((row) => toDto(row, row.assetId ? assetNames.get(row.assetId) ?? null : null, pct(uptime.get(row.id)))),
+    };
+  }
   const counts = await db
     .select({ status: monitoringTargets.status, enabled: monitoringTargets.enabled, total: sql<number>`count(*)::int` })
     .from(monitoringTargets)

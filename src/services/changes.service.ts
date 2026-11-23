@@ -2,6 +2,21 @@ import { and, asc, desc, eq, ilike, inArray, sql, type SQL } from "drizzle-orm";
 import type { z } from "zod";
 import { db } from "@/db";
 import { assets, changeApprovals, changeAssets, changeRequests, users } from "@/db/schema";
+import type { ChangeRequestDoc, ChangeStatus } from "@/db/models/documents";
+import { findAssetsByIds } from "@/db/repositories/assets.repository";
+import {
+  countApprovedChanges,
+  createChangeRequest,
+  decideChangeRequest,
+  findChangeRequestById,
+  listChangeApprovals,
+  listChangeAssets,
+  listChangeRequests,
+  submitChangeRequest,
+  transitionChangeRequest,
+  updateChangeRequest,
+} from "@/db/repositories/changes.repository";
+import { findUserById } from "@/db/repositories/users.repository";
 import { getEnv } from "@/lib/env";
 import type { AuthUser } from "@/lib/auth";
 import { errors, paginationMeta } from "@/lib/http";
@@ -11,7 +26,7 @@ import { diffFields, humanize, iso, likeTerm, pageOffset, userNameMap } from "@/
 import { notifyRoles, notifyUsers } from "@/services/notifications.service";
 import type { changeCreateSchema, changeListQuery, changeTransitionSchema, changeUpdateSchema } from "@/validators/schemas";
 
-type ChangeRow = typeof changeRequests.$inferSelect;
+type ChangeRow = typeof changeRequests.$inferSelect | ChangeRequestDoc;
 type CreateInput = z.infer<typeof changeCreateSchema>;
 type UpdateInput = z.infer<typeof changeUpdateSchema>;
 type ListQuery = z.infer<typeof changeListQuery>;
@@ -51,6 +66,7 @@ function toDto(row: ChangeRow, names: Map<string, string>, approvalsCount: numbe
 }
 
 async function approvalCounts(ids: string[]): Promise<Map<string, number>> {
+  if (process.env.MONGODB_URI) return countApprovedChanges(ids);
   const map = new Map<string, number>();
   if (ids.length === 0) return map;
   const rows = await db
@@ -63,6 +79,16 @@ async function approvalCounts(ids: string[]): Promise<Map<string, number>> {
 }
 
 export async function listChanges(q: ListQuery) {
+  if (process.env.MONGODB_URI) {
+    const result = await listChangeRequests(q);
+    const names = await userNameMap(result.items.flatMap((row) => [row.requesterId, row.implementerId]));
+    const counts = await approvalCounts(result.items.map((row) => row.id));
+    return {
+      items: result.items.map((row) => toDto(row, names, counts.get(row.id) ?? 0)),
+      pagination: paginationMeta(q.page, q.pageSize, result.total),
+      approvalsRequired: getEnv().REQUIRED_CHANGE_APPROVALS,
+    };
+  }
   const conditions: SQL[] = [];
   if (q.search) conditions.push(ilike(changeRequests.title, likeTerm(q.search)));
   if (q.status) conditions.push(eq(changeRequests.status, q.status));
@@ -94,16 +120,32 @@ export async function listChanges(q: ListQuery) {
 }
 
 export async function getChange(id: string) {
-  const [row] = await db.select().from(changeRequests).where(eq(changeRequests.id, id)).limit(1);
+  const row = process.env.MONGODB_URI
+    ? await findChangeRequestById(id)
+    : (await db.select().from(changeRequests).where(eq(changeRequests.id, id)).limit(1))[0] ?? null;
   if (!row) throw errors.notFound("Change request");
   const names = await userNameMap([row.requesterId, row.implementerId]);
-  const affected = await db
+  const affected = process.env.MONGODB_URI
+    ? await (async () => {
+        const links = await listChangeAssets(id);
+        return findAssetsByIds(links.map((link) => link.assetId));
+      })()
+    : await db
     .select({ id: assets.id, name: assets.name, assetType: assets.assetType })
     .from(changeAssets)
     .innerJoin(assets, eq(changeAssets.assetId, assets.id))
     .where(eq(changeAssets.changeId, id))
     .orderBy(asc(assets.name));
-  const approvals = await db
+  const approvals = process.env.MONGODB_URI
+    ? await (async () => {
+        const rows = await listChangeApprovals(id);
+        const approverNames = await userNameMap(rows.map((approval) => approval.approverId));
+        return rows.map((approval) => ({
+          approval,
+          approverName: approval.approverId ? approverNames.get(approval.approverId) ?? null : null,
+        }));
+      })()
+    : await db
     .select({ approval: changeApprovals, approverName: users.name })
     .from(changeApprovals)
     .leftJoin(users, eq(changeApprovals.approverId, users.id))
@@ -126,6 +168,10 @@ export async function getChange(id: string) {
 
 async function assertUserId(userId: string | null | undefined): Promise<void> {
   if (!userId) return;
+  if (process.env.MONGODB_URI) {
+    if (!(await findUserById(userId))) throw errors.unprocessable("The selected implementer does not exist");
+    return;
+  }
   const names = await userNameMap([userId]);
   if (!names.has(userId)) throw errors.unprocessable("The selected implementer does not exist");
 }
@@ -133,7 +179,23 @@ async function assertUserId(userId: string | null | undefined): Promise<void> {
 export async function createChange(actor: AuthUser, input: CreateInput, ip: string) {
   await assertAssetsExist(input.assetIds);
   await assertUserId(input.implementerId);
-  const row = await db.transaction(async (tx) => {
+  const row = process.env.MONGODB_URI
+    ? await createChangeRequest(
+        {
+          title: input.title,
+          description: input.description,
+          reason: input.reason,
+          riskLevel: input.riskLevel,
+          riskAssessment: input.riskAssessment,
+          rollbackPlan: input.rollbackPlan,
+          implementerId: input.implementerId,
+          plannedStartAt: input.plannedStartAt ? new Date(input.plannedStartAt) : null,
+          plannedEndAt: input.plannedEndAt ? new Date(input.plannedEndAt) : null,
+        },
+        actor.id,
+        input.assetIds,
+      )
+    : await db.transaction(async (tx) => {
     const [created] = await tx
       .insert(changeRequests)
       .values({
@@ -168,7 +230,9 @@ export async function createChange(actor: AuthUser, input: CreateInput, ip: stri
 }
 
 export async function updateChange(actor: AuthUser, id: string, input: UpdateInput, ip: string) {
-  const [before] = await db.select().from(changeRequests).where(eq(changeRequests.id, id)).limit(1);
+  const before = process.env.MONGODB_URI
+    ? await findChangeRequestById(id)
+    : (await db.select().from(changeRequests).where(eq(changeRequests.id, id)).limit(1))[0] ?? null;
   if (!before) throw errors.notFound("Change request");
   if (!EDITABLE_STATUSES.includes(before.status)) {
     throw errors.unprocessable("Only draft or rejected change requests can be edited");
@@ -179,7 +243,7 @@ export async function updateChange(actor: AuthUser, id: string, input: UpdateInp
   if (input.assetIds) await assertAssetsExist(input.assetIds);
   if (input.implementerId !== undefined) await assertUserId(input.implementerId);
 
-  const patch: Partial<typeof changeRequests.$inferInsert> = { updatedAt: new Date() };
+  const patch: Partial<Pick<ChangeRequestDoc, "title" | "description" | "reason" | "riskLevel" | "riskAssessment" | "rollbackPlan" | "implementerId" | "plannedStartAt" | "plannedEndAt">> = {};
   if (input.title !== undefined) patch.title = input.title;
   if (input.description !== undefined) patch.description = input.description;
   if (input.reason !== undefined) patch.reason = input.reason;
@@ -190,16 +254,20 @@ export async function updateChange(actor: AuthUser, id: string, input: UpdateInp
   if (input.plannedStartAt !== undefined) patch.plannedStartAt = input.plannedStartAt ? new Date(input.plannedStartAt) : null;
   if (input.plannedEndAt !== undefined) patch.plannedEndAt = input.plannedEndAt ? new Date(input.plannedEndAt) : null;
 
-  await db.transaction(async (tx) => {
-    await tx.update(changeRequests).set(patch).where(eq(changeRequests.id, id));
-    if (input.assetIds) {
-      await tx.delete(changeAssets).where(eq(changeAssets.changeId, id));
-      if (input.assetIds.length > 0) {
-        await tx.insert(changeAssets).values(input.assetIds.map((assetId) => ({ changeId: id, assetId })));
-      }
-    }
-  });
-  const [after] = await db.select().from(changeRequests).where(eq(changeRequests.id, id)).limit(1);
+  const after = process.env.MONGODB_URI
+    ? await updateChangeRequest(id, patch, input.assetIds)
+    : await (async () => {
+        await db.transaction(async (tx) => {
+          await tx.update(changeRequests).set({ ...patch, updatedAt: new Date() }).where(eq(changeRequests.id, id));
+          if (input.assetIds) {
+            await tx.delete(changeAssets).where(eq(changeAssets.changeId, id));
+            if (input.assetIds.length > 0) {
+              await tx.insert(changeAssets).values(input.assetIds.map((assetId) => ({ changeId: id, assetId })));
+            }
+          }
+        });
+        return (await db.select().from(changeRequests).where(eq(changeRequests.id, id)).limit(1))[0] ?? null;
+      })();
   if (!after) throw errors.notFound("Change request");
   const changed = diffFields(before, after, TRACKED);
   await recordAudit({
@@ -215,7 +283,9 @@ export async function updateChange(actor: AuthUser, id: string, input: UpdateInp
 }
 
 export async function submitChange(actor: AuthUser, id: string, ip: string) {
-  const [row] = await db.select().from(changeRequests).where(eq(changeRequests.id, id)).limit(1);
+  const row = process.env.MONGODB_URI
+    ? await findChangeRequestById(id)
+    : (await db.select().from(changeRequests).where(eq(changeRequests.id, id)).limit(1))[0] ?? null;
   if (!row) throw errors.notFound("Change request");
   if (row.requesterId !== actor.id && actor.role !== "admin") {
     throw errors.forbidden("Only the requester can submit this change");
@@ -224,10 +294,14 @@ export async function submitChange(actor: AuthUser, id: string, ip: string) {
   if (!row.riskAssessment || !row.rollbackPlan) {
     throw errors.unprocessable("A risk assessment and rollback plan are required before submission");
   }
-  await db
-    .update(changeRequests)
-    .set({ status: "pending_approval", updatedAt: new Date() })
-    .where(eq(changeRequests.id, id));
+  if (process.env.MONGODB_URI) {
+    if (!(await submitChangeRequest(id))) throw errors.conflict("This change request was updated before it could be submitted");
+  } else {
+    await db
+      .update(changeRequests)
+      .set({ status: "pending_approval", updatedAt: new Date() })
+      .where(eq(changeRequests.id, id));
+  }
   await notifyRoles(
     ["admin", "operator"],
     {
@@ -251,28 +325,35 @@ export async function submitChange(actor: AuthUser, id: string, ip: string) {
 }
 
 export async function decideChange(actor: AuthUser, id: string, decision: "approved" | "rejected", comment: string | null, ip: string) {
-  const [row] = await db.select().from(changeRequests).where(eq(changeRequests.id, id)).limit(1);
+  const row = process.env.MONGODB_URI
+    ? await findChangeRequestById(id)
+    : (await db.select().from(changeRequests).where(eq(changeRequests.id, id)).limit(1))[0] ?? null;
   if (!row) throw errors.notFound("Change request");
   if (row.status !== "pending_approval") throw errors.unprocessable("This change is not awaiting approval");
   if (row.requesterId === actor.id) throw errors.forbidden("Requesters cannot approve their own change");
   if (decision === "rejected" && !comment) throw errors.unprocessable("A comment is required when rejecting a change");
 
-  const existing = await db
-    .select({ id: changeApprovals.id })
-    .from(changeApprovals)
-    .where(and(eq(changeApprovals.changeId, id), eq(changeApprovals.approverId, actor.id)))
-    .limit(1);
-  if (existing.length > 0) throw errors.conflict("You have already recorded a decision for this change");
-
   const required = getEnv().REQUIRED_CHANGE_APPROVALS;
-  const approvedSoFar = (await approvalCounts([id])).get(id) ?? 0;
-  const nextStatus =
-    decision === "rejected" ? "rejected" : approvedSoFar + 1 >= required ? "approved" : "pending_approval";
-
-  await db.transaction(async (tx) => {
-    await tx.insert(changeApprovals).values({ changeId: id, approverId: actor.id, decision, comment });
-    await tx.update(changeRequests).set({ status: nextStatus, updatedAt: new Date() }).where(eq(changeRequests.id, id));
-  });
+  let nextStatus: ChangeStatus;
+  if (process.env.MONGODB_URI) {
+    const result = await decideChangeRequest(id, actor.id, decision, comment, required);
+    if (result.duplicate) throw errors.conflict("You have already recorded a decision for this change");
+    if (!result.change) throw errors.unprocessable("This change is no longer awaiting approval");
+    nextStatus = result.change.status;
+  } else {
+    const existing = await db
+      .select({ id: changeApprovals.id })
+      .from(changeApprovals)
+      .where(and(eq(changeApprovals.changeId, id), eq(changeApprovals.approverId, actor.id)))
+      .limit(1);
+    if (existing.length > 0) throw errors.conflict("You have already recorded a decision for this change");
+    const approvedSoFar = (await approvalCounts([id])).get(id) ?? 0;
+    nextStatus = decision === "rejected" ? "rejected" : approvedSoFar + 1 >= required ? "approved" : "pending_approval";
+    await db.transaction(async (tx) => {
+      await tx.insert(changeApprovals).values({ changeId: id, approverId: actor.id, decision, comment });
+      await tx.update(changeRequests).set({ status: nextStatus, updatedAt: new Date() }).where(eq(changeRequests.id, id));
+    });
+  }
 
   await notifyUsers([row.requesterId], {
     type: "change_decision",
@@ -292,12 +373,14 @@ export async function decideChange(actor: AuthUser, id: string, decision: "appro
 }
 
 export async function transitionChange(actor: AuthUser, id: string, input: TransitionInput, ip: string) {
-  const [row] = await db.select().from(changeRequests).where(eq(changeRequests.id, id)).limit(1);
+  const row = process.env.MONGODB_URI
+    ? await findChangeRequestById(id)
+    : (await db.select().from(changeRequests).where(eq(changeRequests.id, id)).limit(1))[0] ?? null;
   if (!row) throw errors.notFound("Change request");
 
   const invalid = () => errors.unprocessable(`A ${humanize(row.status).toLowerCase()} change cannot be ${input.action === "implement" ? "implemented" : input.action === "rollback" ? "rolled back" : "cancelled"}`);
   const now = new Date();
-  let patch: Partial<typeof changeRequests.$inferInsert>;
+  let patch: Partial<Pick<ChangeRequestDoc, "status" | "implementedAt" | "implementerId" | "implementationNotes" | "rollbackNotes">>;
 
   if (input.action === "implement") {
     if (row.status !== "approved") throw invalid();
@@ -315,7 +398,13 @@ export async function transitionChange(actor: AuthUser, id: string, input: Trans
     patch = { status: "cancelled" };
   }
 
-  await db.update(changeRequests).set({ ...patch, updatedAt: now }).where(eq(changeRequests.id, id));
+  if (process.env.MONGODB_URI) {
+    if (!(await transitionChangeRequest(id, row.status, patch))) {
+      throw errors.conflict("This change request was updated before the transition could be completed");
+    }
+  } else {
+    await db.update(changeRequests).set({ ...patch, updatedAt: now }).where(eq(changeRequests.id, id));
+  }
   if (row.requesterId && row.requesterId !== actor.id) {
     await notifyUsers([row.requesterId], {
       type: "change_decision",
