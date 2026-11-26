@@ -1,31 +1,77 @@
 import cors from "cors";
+import { randomUUID } from "node:crypto";
 import express, { type NextFunction, type Request, type Response } from "express";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import swaggerUi from "swagger-ui-express";
-import { dispatch } from "@infrapilot/server-core";
+import { dispatch } from "./routes";
+import { getMongoDb, getWorkerHealth } from "@infrapilot/database";
+import { openApiSpecification } from "./openapi";
 
 const app = express();
 
 app.disable("x-powered-by");
 app.use(helmet());
+app.use((req, res, next) => {
+  const suppliedId = req.header("x-request-id");
+  const requestId = suppliedId && /^[A-Za-z0-9._-]{1,128}$/.test(suppliedId) ? suppliedId : randomUUID();
+  req.headers["x-request-id"] = requestId;
+  res.setHeader("X-Request-Id", requestId);
+  res.locals.requestId = requestId;
+  next();
+});
 app.use(express.json({ limit: "1mb" }));
 app.use(cors({
   origin(origin, callback) {
-    const allowed = (process.env.APP_ORIGIN ?? "http://localhost:3000").split(",");
+    const allowed = (process.env.FRONTEND_ORIGIN ?? process.env.APP_ORIGIN ?? "http://localhost:3000").split(",");
     callback(null, !origin || allowed.includes(origin));
   },
   credentials: true,
 }));
 app.use(rateLimit({ windowMs: 60_000, limit: 300, standardHeaders: "draft-7", legacyHeaders: false }));
 
-app.get("/api/health", (_req, res) => res.json({ data: { status: "ok", timestamp: new Date().toISOString() } }));
-app.use("/api/docs", swaggerUi.serve, swaggerUi.setup({
-  openapi: "3.1.0",
-  info: { title: "InfraPilot API", version: "1.0.0" },
-  servers: [{ url: "/api/v1" }],
-  paths: {},
-}));
+app.get("/health/live", (_req, res) => res.json({ status: "ok" }));
+app.get("/health/ready", async (_req, res) => {
+  try {
+    const db = await getMongoDb();
+    await db.command({ ping: 1 });
+    res.json({ status: "ok" });
+  } catch {
+    console.error(JSON.stringify({
+      event: "backend_readiness_failed",
+      requestId: res.locals.requestId,
+    }));
+    res.status(503).json({ status: "not_ready" });
+  }
+});
+app.get("/health", (_req, res) => res.json({ status: "ok" }));
+app.get("/health/worker", async (_req, res) => {
+  try {
+    const health = await getWorkerHealth();
+    res.status(health.status === "ok" ? 200 : 503).json(health);
+  } catch {
+    console.error(JSON.stringify({
+      event: "worker_readiness_failed",
+      requestId: res.locals.requestId,
+    }));
+    res.status(503).json({ status: "unavailable", activeWorkers: 0, lastHeartbeatAt: null });
+  }
+});
+app.get("/api/health", async (_req, res) => {
+  try {
+    const db = await getMongoDb();
+    await db.command({ ping: 1 });
+    res.json({ data: { status: "ok", timestamp: new Date().toISOString() } });
+  } catch {
+    console.error(JSON.stringify({
+      event: "backend_readiness_failed",
+      requestId: res.locals.requestId,
+    }));
+    res.status(503).json({ data: { status: "not_ready", timestamp: new Date().toISOString() } });
+  }
+});
+app.get("/api/openapi.json", (_req, res) => res.json(openApiSpecification));
+app.use("/api/docs", swaggerUi.serve, swaggerUi.setup(openApiSpecification));
 
 app.use("/api/v1", async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -46,8 +92,20 @@ app.use("/api/v1", async (req: Request, res: Response, next: NextFunction) => {
 });
 
 app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
-  const message = error instanceof Error ? error.message : "Internal server error";
-  res.status(500).json({ error: { code: "INTERNAL_ERROR", message } });
+  const requestId = res.locals.requestId as string | undefined;
+  const status = typeof error === "object" && error !== null && "status" in error &&
+    typeof error.status === "number" && error.status >= 400 && error.status < 500
+    ? error.status
+    : 500;
+  const name = error instanceof Error ? error.name : "UnknownError";
+  console.error(JSON.stringify({ event: "backend_request_failed", requestId, status, errorName: name }));
+  res.status(status).json({
+    error: {
+      code: status < 500 ? (status === 400 ? "BAD_REQUEST" : "REQUEST_ERROR") : "INTERNAL_ERROR",
+      message: status < 500 ? "Invalid request" : "Internal server error",
+      requestId,
+    },
+  });
 });
 
 export { app };

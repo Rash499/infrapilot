@@ -19,6 +19,24 @@
     "incremental": true,
     "baseUrl": ".",
     "paths": {
+      "@/db": [
+        "./scripts/migration/postgres/index.ts"
+      ],
+      "@/db/schema": [
+        "./scripts/migration/postgres/schema.ts"
+      ],
+      "@/db/*": [
+        "./packages/database/src/*"
+      ],
+      "@/lib/*": [
+        "./packages/server-core/src/lib/*"
+      ],
+      "@/services/*": [
+        "./packages/server-core/src/services/*"
+      ],
+      "@/validators/*": [
+        "./packages/contracts/src/validators/*"
+      ],
       "@/*": [
         "./src/*"
       ]

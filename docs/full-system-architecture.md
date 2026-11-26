@@ -1,6 +1,6 @@
 # InfraPilot – Full System Architecture
 
-> **Status:** MongoDB migration in progress. This document records the complete system architecture and distinguishes **current repository capabilities** from **staged migration work** and **future roadmap capabilities**.
+> **Status:** Runtime MongoDB cutover is implemented. PostgreSQL/Drizzle remains isolated to the optional one-time data importer; live MongoDB replica-set and E2E validation is still required before production rollout.
 
 InfraPilot is a centralized Infrastructure and IT Operations Management Platform (ITOM) designed to manage IT infrastructure, monitor service availability, identify security risks, manage incidents, and control infrastructure changes through one web-based console.
 
@@ -25,17 +25,17 @@ API & Application Layer — REST API · TypeScript (/api/v1)
   ├──► Background Processing — Monitoring Worker (Scheduler · Probe Engine · State Machine · Reminders)
   │
   └──► Data Persistence Layer
-        • Supported deployment: MongoDB 8 (`rs0` replica set, `src/db/mongo.ts`, `src/db/collections.ts`, `src/db/app_db.ts`, `src/db/models/`, `src/db/repositories/`)
-        • PostgreSQL/Drizzle compatibility paths remain during the staged cutover
+        • Runtime database: MongoDB 8 (`rs0` replica set, `packages/database/src/`)
+        • PostgreSQL/Drizzle: isolated migration-only tooling under `scripts/migration/postgres`
 ```
 
 ### Request lifecycle
 
 1. A user interacts with the React frontend.
-2. The frontend sends an HTTP request to `/api/v1/*` via Axios (`src/lib/client/api.ts`) with single-flight token refresh and `X-InfraPilot-Request: 1` anti-CSRF header.
-3. The API authenticates the bearer JWT and re-verifies the user's current active state and role (`src/lib/auth.ts`).
-4. The controller validates params, query strings, and request bodies via Zod (`src/validators/schemas.ts`).
-5. The service executes business rules, transactions, audit logging, and notifications (`src/services/*.service.ts`).
+2. The frontend sends an HTTP request to `/api/v1/*` via Axios (`apps/frontend/src/lib/client/api.ts`) with single-flight token refresh and `X-InfraPilot-Request: 1` anti-CSRF header.
+3. The API authenticates the bearer JWT and re-verifies the user's current active state and role (`packages/server-core/src/lib/auth.ts`).
+4. The controller validates params, query strings, and request bodies via Zod (`packages/contracts/src/validators/schemas.ts`).
+5. The service executes business rules, transactions, audit logging, and notifications (`packages/server-core/src/services/`).
 6. The database layer reads or writes persisted records.
 7. The API returns a standardized JSON envelope (`{ data, meta }` or `{ error: { code, message, details } }`).
 
@@ -45,7 +45,8 @@ API & Application Layer — REST API · TypeScript (/api/v1)
 
 | Layer | Technology | Responsibility |
 |---|---|---|
-| Frontend | Next.js 16 (App Router) | Application framework & route handlers |
+| Frontend | Next.js 16 (App Router) | Standalone UI and same-origin API proxy |
+| Backend | Express 5 | Independently deployable REST API |
 | UI | React 19 | Interactive interface |
 | Language | TypeScript (strict) | Shared contracts across frontend & backend |
 | Styling | Tailwind CSS v4 | Responsive UI |
@@ -55,13 +56,13 @@ API & Application Layer — REST API · TypeScript (/api/v1)
 | HTTP client | Axios | API communication & single-flight refresh |
 | Authentication | `jose` + Node.js `crypto` | HS256 JWT access tokens & scrypt password hashing |
 | Primary DB & driver | MongoDB 8 + Node.js Driver 6 | Supported runtime and CI target (`rs0` replica set) |
-| Compatibility DB | PostgreSQL + Drizzle ORM | Legacy fallback and one-time migration support; removal remains pending |
+| Migration-only DB | PostgreSQL + Drizzle ORM | Optional one-time data import; not used by application runtime |
 | Background jobs | Node.js monitoring worker | Probes, state evaluation, roll-ups & reminders |
 | Testing | Vitest, Testing Library, Playwright | Unit, component & browser E2E testing |
 | Packaging | Docker & Docker Compose | Application packaging & local orchestration |
 | CI/CD | GitHub Actions | Automated lint, typecheck, tests & build |
 
-> **Database migration distinction:** MongoDB is the configured runtime for the supported Compose and CI paths. PostgreSQL/Drizzle fallback code and migration tooling remain in the repository and still require removal after the MongoDB workflows pass live validation.
+> **Database boundary:** Runtime packages use MongoDB only. The optional importer reads legacy PostgreSQL records and performs idempotent insert-only writes to MongoDB.
 
 ---
 
@@ -96,12 +97,13 @@ API & Application Layer — REST API · TypeScript (/api/v1)
 ## 4. Backend architecture & module boundaries
 
 ```
-src/app/api/v1/[...segments]/route.ts  → Thin Next.js entry point
-src/routes/index.ts                    → Origin/Sec-Fetch-Site check, route matching, UUID validation, error mapping
-src/controllers/*.controller.ts        → Authorize → validate → call service → respond
-src/validators/schemas.ts              → Shared Zod 4 schemas
-src/services/*.service.ts              → Business rules, transactions, audit & notifications
-src/db/                                → Persistence layer (Drizzle + staged MongoDB models/repositories)
+apps/frontend/src/app/api/v1/[...segments]/route.ts → Same-origin proxy
+apps/backend/src/app.ts                → Express middleware and HTTP health
+apps/backend/src/routes/               → Route matching and request dispatch
+apps/backend/src/controllers/          → Authorize → validate → call service → respond
+packages/contracts/src/                → Shared API types, Zod schemas and permissions
+packages/server-core/src/services/     → Business rules, transactions, audit & notifications
+packages/database/src/                 → MongoDB-only runtime persistence
 ```
 
 | Module | Responsibility |
@@ -124,7 +126,7 @@ src/db/                                → Persistence layer (Drizzle + staged M
 
 Target database: **MongoDB 8.x**, replica set **`rs0`**, database **`infrapilot`**, accessed with a least-privilege application account (`MONGODB_URI`, `MONGODB_DB`).
 
-### Registered collections (18)
+### Registered collections (20)
 
 | Collection | Stored information |
 |---|---|
@@ -146,21 +148,22 @@ Target database: **MongoDB 8.x**, replica set **`rs0`**, database **`infrapilot`
 | `change_approvals` | Per-approver decisions (`approved` / `rejected`) |
 | `notifications` | Per-user operational feed & read timestamps |
 | `audit_logs` | Immutable operational & security audit records |
+| `worker_statuses` | Worker-instance lifecycle and heartbeat timestamps |
 
 ### Design rules
 - Retain UUID strings on both `_id` and `id` (`newEntityIds()`) so API contracts do not break.
-- Use explicit collection names (`src/db/collections.ts`) and explicit indexes (`src/db/app_db.ts`).
+- Use explicit collection names (`packages/database/src/collections.ts`) and indexes (`packages/database/src/app_db.ts`).
 - Use MongoDB multi-document transactions (`withMongoTransaction`) on `rs0` for atomic multi-collection mutations.
 - Never drop collections or user data during application startup or seeding.
-- Data layer modules: `src/db/mongo.ts`, `src/db/collections.ts`, `src/db/app_db.ts`, `src/db/init.ts`, `src/db/models/documents.ts`, `src/db/repositories/`, `scripts/check-mongodb.ts`, `scripts/migrate-data.ts`.
+- Data layer modules: `packages/database/src/`, `scripts/init-mongodb.ts`, `scripts/check-mongodb.ts`, and `scripts/migrate-data.ts`.
 
 ---
 
 ## 6. Infrastructure monitoring architecture
 
 1. **Configuration:** HTTP/HTTPS/TCP targets, intervals (≥ 30s), timeouts, degraded latency thresholds, optional asset link, SSRF controls.
-2. **Scheduler (`src/workers/monitor.worker.ts`):** Claims due targets atomically, runs probes with bounded concurrency (`MONITOR_MAX_CONCURRENCY`), prunes expired results (`MONITOR_RETENTION_DAYS`), triggers 24-hour maintenance reminders.
-3. **Probe engine (`src/workers/probe.ts`):** Executes pinned-IP HTTP/HTTPS/TCP checks (defeating DNS rebinding), classifies network errors safely without leaking internals.
+2. **Scheduler (`apps/worker/src/monitor.worker.ts`):** Claims due targets atomically, runs probes with bounded concurrency (`MONITOR_MAX_CONCURRENCY`), prunes expired results (`MONITOR_RETENTION_DAYS`), and triggers 24-hour maintenance reminders.
+3. **Probe engine (`packages/server-core/src/monitoring/probe.ts`):** Executes pinned-IP HTTP/HTTPS/TCP checks (defeating DNS rebinding), classifies network errors safely without leaking internals.
 4. **State machine:** `Healthy` → `Degraded` (latency > threshold or < `MONITOR_FAILURE_THRESHOLD` failures) → `Unavailable` (≥ `MONITOR_FAILURE_THRESHOLD` consecutive failures), plus asset status roll-up and transition notifications.
 
 **Planned monitoring extensions (not yet implemented):** Prometheus, Node Exporter, Windows Exporter, Blackbox Exporter, SNMP, certificate expiry & DNS record monitoring.
@@ -180,15 +183,15 @@ Target database: **MongoDB 8.x**, replica set **`rs0`**, database **`infrapilot`
 
 ## 8. Deployment & CI/CD architecture
 
-- **Supported Compose setup:** `docker-compose.yml` (MongoDB 8.0 `rs0` replica set + `mongo-init` user/index bootstrap + `app` + `worker`).
+- **Supported Compose setup:** `docker-compose.yml` (MongoDB 8.0 `rs0` replica set + `mongo-init` user/index bootstrap + `app` + `backend` + `worker`).
 - **CI pipeline:** `.github/workflows/ci.yml` — ESLint, TypeScript, Vitest, production build, and Playwright E2E.
 
 ---
 
 ## 9. Roadmap & recommended sequence
 
-1. **Complete MongoDB cutover:** Verify every runtime route, seed flow, worker, readiness check, and transaction against a live `rs0` replica set; then remove PostgreSQL fallback code and Drizzle/PostgreSQL dependencies while retaining the one-time importer if needed.
-2. **Stabilize & harden:** Keep lint, strict `tsc --noEmit`, Vitest, production build, API smoke suite (`scripts/smoke-test.ts`), and Playwright E2E green on every change.
+1. **Validate the MongoDB cutover:** Run the full CI/E2E workflow against an isolated live `rs0` replica set and verify the importer against a safe legacy snapshot.
+2. **Stabilize & harden:** Keep workspace lint, strict typechecks, Vitest, production build, API smoke suite (`scripts/smoke-test.ts`), and Playwright E2E green on every change.
 3. **Core infrastructure expansion:** IPAM (subnets/VLANs/allocations), network topology, asset CSV import/export.
 4. **Monitoring & alerting expansion:** Prometheus + exporter adapters, alert rules, email/chat/webhook notification sinks.
 5. **Security & ITSM:** Scanner ingestion (Trivy/Greenbone), service requests, SLAs, multi-approver governance.

@@ -1,7 +1,7 @@
 # InfraPilot Ultimate — Implementation Status
 
-Last reviewed: 2026-11-23
-Branch: `feature/infra-pilot-ultimate-foundation`
+Last reviewed: 2026-11-26
+Branch: `architecture-completion-stabilization`
 
 This is a repository inspection snapshot, not a claim that every listed capability has passed runtime tests. Status labels:
 
@@ -14,11 +14,11 @@ This is a repository inspection snapshot, not a claim that every listed capabili
 
 | Area | Status | Evidence in repository | Remaining work |
 |---|---|---|---|
-| Authentication | Present — verification pending | `src/controllers/auth.controller.ts`, `src/services/auth.service.ts`, `src/lib/auth.ts`, auth pages | Regression tests, session management UI, verify password reset delivery and origin/CSRF behavior |
+| Authentication | Present — verification pending | `apps/backend/src/controllers/auth.controller.ts`, `packages/server-core/src/services/auth.service.ts`, `packages/server-core/src/lib/auth.ts`, frontend auth pages | Verify password-reset delivery and origin/CSRF behavior |
 | RBAC | Partial | User roles admin/operator/viewer and API authorization | Expand to granular permissions and requested role set |
 | User administration | Partial — expanded | Role changes, activation controls, self-service and administrator session visibility/revocation, paginated successful/failed sign-in history, session-revocation audit events, and a matrix derived from server-enforced role levels | Configurable/granular permissions |
-| Asset inventory | Present — verification pending | `src/controllers/assets.controller.ts`, `src/services/assets.service.ts`, asset pages and schema; CSV import/export with row validation and error reporting | Richer relationships and lifecycle |
-| Monitoring | Present — verification pending | Monitoring controller/service, worker, probe, target/result tables and page | Prometheus/exporter adapters, alert rules, retention verification, DNS/TCP/HTTP breadth |
+| Asset inventory | Present — verification pending | Backend assets controller, `packages/server-core/src/services/assets.service.ts`, asset pages and contracts; CSV import/export with row validation and error reporting | Richer relationships and lifecycle |
+| Monitoring | Present — verification pending | Backend monitoring controller, server-core service, `apps/worker`, probe, MongoDB targets/results and page | Prometheus/exporter adapters, alert rules, retention verification |
 | Security findings | Present — verification pending | Findings service/routes/UI, severity/status and finding history | CVSS, scanner ingestion, deduplication, export |
 | Incidents | Present — verification pending | Incident service/routes/UI, comments, asset links | Service requests, SLA/escalation, complete timeline and cross-module links |
 | Maintenance | Present — verification pending | Maintenance service/routes/UI and asset links | Conflict policy, richer scheduling and reminder verification |
@@ -52,32 +52,28 @@ This is a repository inspection snapshot, not a claim that every listed capabili
 
 ## Repository and delivery findings
 
-1. The repository contains a Next.js 16 / React 19 / TypeScript application with MongoDB as the configured deployment and CI database. PostgreSQL/Drizzle compatibility and migration code remain during the staged cutover. It does not use the Vite + Express + Prisma stack named in the reference specification.
+1. The repository is a Next.js 16 / React 19 frontend, standalone Express 5 backend, independent monitoring worker, and shared contracts/database/server-core packages. MongoDB is the only runtime data store; PostgreSQL/Drizzle is isolated to the optional one-time importer.
 2. `package-lock.json` is present and Docker/CI use `npm ci` for reproducible dependency installation.
-3. Package scripts expose `npm test`, `npm run test:e2e`, and MongoDB initialization, seed, and check commands.
-4. GitHub Actions now starts a MongoDB replica set for Playwright E2E. A live run of the updated pipeline is still needed to verify the new MongoDB deployment path; historical PostgreSQL CI results do not establish that.
+3. Root scripts cover workspace typechecks, frontend build, lint, unit tests, E2E, MongoDB bootstrap/seed/check, and safe importer dry-run/live commands.
+4. GitHub Actions starts an isolated MongoDB replica set and Playwright starts backend, worker, and frontend. A live run of this updated workflow is still needed to verify the migration against MongoDB.
 5. External integrations (Prometheus, exporters, GitHub, Docker Engine, Kubernetes, Trivy, Greenbone, Restic, SMTP and Telegram) require their own installation, credentials and network policy. They must be shown as unconfigured until a successful connection test exists.
 
 ## Immediate next work
 
-1. Run the MongoDB CI/E2E workflow against a live `rs0` and resolve any integration failures.
-2. Complete PostgreSQL fallback/dependency removal only after every runtime route and worker passes against MongoDB.
-3. Audit authentication, cross-origin behavior, RBAC and audit logging with focused tests.
-4. Complete the core infrastructure slice: asset fields/import/export, IPAM and persisted topology.
-5. Complete real monitoring integrations and alert lifecycle before adding more dashboards.
-6. Add ITSM service requests/SLA and configurable notification delivery.
-7. Proceed through security, DevOps, container/Kubernetes, automation, backup/DR and advanced modules in the phases documented in `ultimate-architecture.md`.
+1. Run the updated MongoDB replica-set CI/E2E workflow and resolve integration issues.
+2. Verify the optional PostgreSQL importer using a non-production snapshot; it never deletes source or destination records.
+3. Continue the product roadmap—IPAM/topology, external monitoring integrations, service requests/SLA, and other planned modules—in the phases documented in `ultimate-architecture.md`.
 
 ## Verification record
 
 | Check | Result | Evidence |
 |---|---|---|
-| Repository tree inspection | Completed | `main` tree reviewed on 2026-11-21 |
-| Architecture blueprint | Added on feature branch | `docs/ultimate-architecture.md` |
-| CI lockfile mismatch mitigation | Changed on feature branch | `.github/workflows/ci.yml` |
-| Test scripts | Added on feature branch | `package.json` |
-| Local dependency install | Not run | Local clone unavailable in this execution environment; CI dependency installation passed using `npm install` |
-| Lint / type-check / build | Passed in CI | [CI run #5](https://github.com/Rash499/infrapilot/actions/runs/44805892512), main commit `f15c299` |
-| Unit / component / E2E tests | Passed in CI | [CI run #5](https://github.com/Rash499/infrapilot/actions/runs/44805892512); configured suite only |
-| Local MongoDB replica-set verification | Passed | `npm run db:init:mongo`; `npm test` (92 tests); typecheck; production build; `npm run test:e2e` (5 tests), including sign-in history, audit filtering and persisted monitoring worker results |
+| Workspace migration | Implemented | Frontend, backend, worker, contracts, database and server-core package manifests and TypeScript configs |
+| Architecture and deployment docs | Updated | `docs/architecture.md`, `docs/full-system-architecture.md`, `docs/deployment.md`, and migration status |
+| CI configuration | Updated; live workflow pending | `.github/workflows/ci.yml` provisions isolated MongoDB `rs0` for E2E |
+| Local lint | Passed | 0 errors; 19 existing frontend warnings |
+| Workspace typecheck and production build | Passed | `npm run build` (typechecks every workspace, then builds frontend) |
+| Unit / component tests | Passed | `npm test`: 98 tests across 14 files |
+| Live MongoDB replica-set / Playwright E2E | Not run | No isolated MongoDB replica set or CI result verified in this environment |
+| Importer snapshot validation | Not run | Requires a non-production PostgreSQL snapshot |
 | Production deployment | Not deployed | No deployment environment configured |

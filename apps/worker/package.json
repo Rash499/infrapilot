@@ -1,12 +1,16 @@
 {
   "name": "@infrapilot/worker",
   "private": true,
+  "version": "0.1.0",
   "scripts": {
     "dev": "tsx watch src/worker.ts",
     "start": "tsx src/worker.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@infrapilot/contracts": "*",
+    "@infrapilot/database": "*",
+    "@infrapilot/server-core": "*",
     "tsx": "^4.23.15"
   },
   "devDependencies": {

@@ -10,7 +10,10 @@ type MockCollectionData = {
 
 const mocks = vi.hoisted(() => ({
   collectionData: new Map<string, MockCollectionData>(),
-  collections: new Map<string, { find: { mock: { calls: unknown[][] } } }>(),
+  collections: new Map<string, {
+    find: { mock: { calls: unknown[][] } };
+    aggregate: { mock: { calls: unknown[][] } };
+  }>(),
   getCollection: vi.fn(),
   findAssetNamesByIds: vi.fn(),
   userNameMap: vi.fn(),
@@ -111,8 +114,7 @@ describe("MongoDB dashboard priority panels", () => {
       counts: [],
     });
     mocks.collectionData.set(collections.incidents, {
-      aggregates: [[{ _id: "critical", count: 1 }]],
-      finds: [[{
+      aggregates: [[{
         id: "incident-1",
         number: 7,
         title: "Checkout unavailable",
@@ -121,7 +123,8 @@ describe("MongoDB dashboard priority panels", () => {
         assigneeId: "user-1",
         openedAt: new Date("2026-01-08T00:00:00.000Z"),
         updatedAt: new Date("2026-01-08T00:01:00.000Z"),
-      }]],
+      }], [{ _id: "critical", count: 1 }]],
+      finds: [],
       counts: [1],
     });
     mocks.collectionData.set(collections.securityFindings, {
@@ -201,8 +204,8 @@ describe("MongoDB dashboard priority panels", () => {
       },
     ]);
     expect(dashboard.monitoringSummary).toEqual({ uptimePct: 90, checks: 10 });
-    expect(mocks.collections.get(collections.incidents)?.find).toHaveBeenCalledWith({
-      status: { $nin: ["resolved", "closed"] },
+    expect(mocks.collections.get(collections.incidents)?.aggregate.mock.calls[0][0]).toContainEqual({
+      $match: { status: { $nin: ["resolved", "closed"] } },
     });
     expect(mocks.collections.get(collections.securityFindings)?.find).toHaveBeenCalledWith({
       severity: { $in: ["critical", "high"] },

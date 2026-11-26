@@ -1,5 +1,6 @@
 import "dotenv/config";
-import { closeMongo, ensureMongoIndexes, getMongoDb } from "../src/db/mongo";
+import "@infrapilot/server-core/load-env";
+import { closeMongo, ensureMongoIndexes, getMongoDb } from "@infrapilot/database";
 
 async function main(): Promise<void> {
   try {

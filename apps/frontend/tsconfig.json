@@ -15,12 +15,13 @@
     "incremental": true,
     "paths": {
       "@infrapilot/contracts": ["../../packages/contracts/src/index.ts"],
-      "@/validators/*": ["../../src/validators/*"],
-      "@/lib/permissions": ["../../src/lib/permissions"],
+      "@/validators/*": ["../../packages/contracts/src/validators/*"],
+      "@/lib/permissions": ["../../packages/contracts/src/permissions.ts"],
+      "@/types/api": ["../../packages/contracts/src/types/api.ts"],
       "@/*": ["./src/*"]
     },
     "plugins": [{"name": "next"}]
   },
-  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts", ".next/dev/types/**/*.ts"],
+  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", "../../packages/contracts/**/*.ts", ".next/types/**/*.ts", ".next/dev/types/**/*.ts"],
   "exclude": ["node_modules"]
 }

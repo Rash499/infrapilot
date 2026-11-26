@@ -7,15 +7,23 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "noEmit": true,
+    "baseUrl": ".",
     "resolveJsonModule": true,
     "types": ["node"],
     "paths": {
       "@infrapilot/contracts": ["../../packages/contracts/src/index.ts"],
       "@infrapilot/database": ["../../packages/database/src/index.ts"],
       "@infrapilot/server-core": ["../../packages/server-core/src/index.ts"],
-      "@/validators/*": ["../../src/validators/*"],
-      "@/*": ["../../src/*"]
+      "@infrapilot/server-core/load-env": ["../../packages/server-core/src/load-env.ts"],
+      "@/controllers/*": ["src/controllers/*"],
+      "@/routes/*": ["src/routes/*"],
+      "@/services/*": ["../../packages/server-core/src/services/*"],
+      "@/lib/*": ["../../packages/server-core/src/lib/*"],
+      "@/db/*": ["../../packages/database/src/*"],
+      "@/validators/*": ["../../packages/contracts/src/validators/*"],
+      "@/workers/probe": ["../../packages/server-core/src/monitoring/probe.ts"],
+      "@/*": ["src/*"]
     }
   },
-  "include": ["src/**/*.ts", "../../src/**/*.ts"]
+  "include": ["src/**/*.ts", "../../packages/**/*.ts"]
 }

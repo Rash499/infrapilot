@@ -13,18 +13,24 @@ cp .env.example .env            # set MongoDB credentials, MONGODB_URI and JWT_A
 npm ci
 npm run db:init:mongo
 SEED_PASSWORD='choose-a-strong-dev-password' npm run db:seed:mongo
-npm run dev                     # http://localhost:3000 (scheduler runs in-process)
 ```
 
-For an existing PostgreSQL installation, import its data before switching the application to MongoDB.
-Set `DATABASE_URL` temporarily and use `scripts/migrate-data.ts`; it supports `--dry-run` and does not
-delete or modify the source database.
-
-Run the monitoring worker as a separate process (recommended when the web server runs in dev mode):
+Start the backend, worker, and frontend in separate terminals:
 
 ```bash
-INFRAPILOT_EMBEDDED_WORKER=false npx tsx src/workers/run.ts
+npm run dev:backend
+npm run dev:worker
+npm run dev:frontend
 ```
+
+```bash
+# Existing PostgreSQL installations only: set DATABASE_URL and inspect first.
+npm run db:migrate:mongo:dry-run
+# Run the idempotent importer only after reviewing the dry-run output.
+npm run db:migrate:mongo
+```
+
+The importer preserves the source database and existing MongoDB records; it only inserts missing MongoDB documents.
 
 ## 2. Docker Compose
 
@@ -34,7 +40,7 @@ cp .env.example .env
 # `openssl rand -base64 756`, and set JWT_ACCESS_SECRET, APP_ORIGIN and EXPOSE_RESET_TOKEN=false.
 # Keep MONGODB_URI's app password in sync with MONGO_APP_PASSWORD.
 docker compose up -d --build
-docker compose ps                 # mongo, mongo-init, app and worker should become healthy
+docker compose ps                 # mongo, backend, app and worker healthy; mongo-init exits successfully
 curl -fsS http://localhost:3000/api/health
 ```
 
@@ -44,14 +50,17 @@ Services:
 | --- | --- | --- |
 | `mongo` | MongoDB 8.0 single-node `rs0` replica set | Named volume `mongodata`; database port bound to 127.0.0.1; keyfile is generated inside the container |
 | `mongo-init` | Replica-set and application bootstrap | Creates the app user with `readWrite` access to the configured database and idempotently ensures collections/indexes |
-| `app` | Next.js production server | Starts after database bootstrap; health check on `/api/health` |
-| `worker` | Monitoring scheduler | Same image, `INFRAPILOT_EMBEDDED_WORKER=false`; targets are claimed atomically |
+| `backend` | Express REST API | Starts after database bootstrap; health on `/api/health`, `/health/ready`, and `/health/worker` |
+| `app` | Next.js production frontend | Proxies API requests to the backend; health check on `/api/health` |
+| `worker` | Monitoring scheduler | Independent process with `/health/live` and heartbeat-backed `/health/ready`; targets are claimed atomically |
 
 Create a seed administrator once (dev/staging only; does not overwrite existing users):
 
 ```bash
 SEED_PASSWORD='choose-a-strong-password' npm run db:seed:mongo
 ```
+
+The seed adds missing admin/operator/viewer demo accounts and never overwrites existing users.
 
 Backup and restore:
 
@@ -110,7 +119,7 @@ infrapilot.example.com {
 3. `npx next typegen` and `npx tsc --noEmit`
 4. `npm test` (unit, component and probe tests)
 5. `npm run build`
-6. End-to-end job: start a MongoDB `rs0` replica set, bootstrap collections, seed, build, and run `npm run test:e2e`.
+6. End-to-end job: start a MongoDB `rs0` replica set, bootstrap collections, seed, build, and run `npm run test:e2e` with backend, worker, and frontend launched by Playwright.
 
 ## 7. Upgrades
 

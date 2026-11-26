@@ -40,7 +40,10 @@ Every response carries `X-Request-Id`. Send your own value to correlate logs.
 
 | Method | Path | Auth | Purpose |
 | --- | --- | --- | --- |
-| GET | `/api/health` | none | Database connectivity probe. Returns `{ "ok": true }` or 500 |
+| GET | `/health/live` | none | Liveness probe; confirms the API process is running |
+| GET | `/health/ready` | none | Readiness probe; returns 503 when MongoDB cannot be reached |
+| GET | `/health` | none | Backward-compatible liveness endpoint |
+| GET | `/api/health` | none | Backward-compatible MongoDB readiness probe |
 
 ## Authentication — `/auth`
 

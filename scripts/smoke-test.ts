@@ -1,7 +1,7 @@
 /**
  * End-to-end API smoke test for a running InfraPilot instance that holds the demo workspace.
  *
- *   SEED_RESET=true npx tsx src/db/seed.ts     # rebuild the demo data
+ *   npm run db:seed:mongo                    # add any missing demo users without overwriting existing users
  *   npm run start                             # in another terminal
  *   npx tsx scripts/smoke-test.ts
  *
@@ -11,8 +11,8 @@
  * It leaves a few records named "Smoke ..." behind; re-run the seed for a clean workspace.
  */
 
-// Must be evaluated first: reads `.env.local` and `.env` so SEED_PASSWORD and DATABASE_URL are set.
-import "../src/lib/load-env";
+// Must be evaluated first: reads `.env.local` and `.env` so seed credentials are available.
+import "@infrapilot/server-core/load-env";
 
 const BASE_URL = (process.env.SMOKE_BASE_URL ?? "http://localhost:3000").replace(/\/+$/, "");
 const API = `${BASE_URL}/api/v1`;
