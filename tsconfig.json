@@ -31,6 +31,9 @@
       "@/lib/*": [
         "./packages/server-core/src/lib/*"
       ],
+      "@/services/*": [
+        "./packages/server-core/src/services/*"
+      ],
       "@/validators/*": [
         "./packages/contracts/src/validators/*"
       ],
