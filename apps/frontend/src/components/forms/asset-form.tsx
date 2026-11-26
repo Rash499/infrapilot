@@ -116,10 +116,10 @@ export function AssetFormModal({
         {errors.root?.message ? <Alert tone="danger">{errors.root.message}</Alert> : null}
 
         <FormSection title="Identity">
-          <Field label="Asset name" htmlFor="asset-name" error={errors.name?.message} required className="sm:col-span-2">
+          <Field label="Asset name *" htmlFor="asset-name" error={errors.name?.message} className="sm:col-span-2">
             <Input id="asset-name" {...register("name", { required: "Asset name is required" })} placeholder="e.g. prod-db-01" />
           </Field>
-          <Field label="Asset type" htmlFor="asset-type" required>
+          <Field label="Asset type *" htmlFor="asset-type">
             <Select id="asset-type" {...register("assetType")}>
               {ASSET_TYPE_OPTIONS.map((o) => (
                 <option key={o.value} value={o.value}>
@@ -128,7 +128,7 @@ export function AssetFormModal({
               ))}
             </Select>
           </Field>
-          <Field label="Environment" htmlFor="asset-env" required>
+          <Field label="Environment *" htmlFor="asset-env">
             <Select id="asset-env" {...register("environment")}>
               {ENVIRONMENT_OPTIONS.map((o) => (
                 <option key={o.value} value={o.value}>

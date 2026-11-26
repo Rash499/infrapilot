@@ -117,10 +117,10 @@ function MonitorFormModal({
       <form id="monitor-form" onSubmit={onSubmit} className="space-y-5" noValidate>
         {errors.root?.message ? <Alert tone="danger">{errors.root.message}</Alert> : null}
         <FormSection title="Target">
-        <Field label="Name" htmlFor="m-name" className="sm:col-span-2" required>
+        <Field label="Name *" htmlFor="m-name" className="sm:col-span-2">
           <Input id="m-name" {...register("name", { required: "Name is required" })} placeholder="Checkout API health" />
         </Field>
-        <Field label="Check type" htmlFor="m-type" required>
+        <Field label="Check type *" htmlFor="m-type">
           <Select id="m-type" {...register("monitorType")}>
             <option value="http">HTTP / HTTPS endpoint</option>
             <option value="tcp">TCP connectivity</option>

@@ -97,10 +97,10 @@ No UI dependency was added; charts still use the existing `recharts` install.
 |---|---|
 | `npm run typecheck` | Pass — all six workspaces |
 | `npm run lint` | Pass — 0 errors, 20 warnings (all pre-existing `react-hooks/set-state-in-effect` advisories in auth/async effects) |
-| `npm test` | Pass — 109 tests, 16 files (98 existing + 5 shell + 6 primitives) |
+| `npm test` | Pass — 114 tests, 19 files (98 existing + 5 shell + 6 primitives + 2 users tabs + 2 asset form + 1 monitoring form) |
 | `npm run build` | Pass — 18 routes, static + dynamic split unchanged |
 | Dev-server SSR smoke | `/login`, `/`, `/assets`, `/monitoring`, `/users`, `/settings`, `/notifications` return 200; `/does-not-exist` returns 404 with the branded page; shell skeleton renders server-side so no unauthenticated flash |
-| `npm run test:e2e` | **Not run (environment)** — Playwright `webServer` starts the backend, which exits with `MONGODB_URI is required`; no MongoDB replica set or Playwright browser is available in this environment |
+| `npm run test:e2e` | Runs in the PR workflow (MongoDB `rs0` service). The first CI run exposed two selector regressions — the users tab bar changed from buttons to `role="tab"`, and `Field`’s `required` marker hid the literal `*` in the accessible label — both fixed; the label contracts the suite drives are now pinned by unit tests |
 | Visual regression / screenshots | **Not available** — no browser binaries installed |
 | Authenticated pop-up/drawer interaction | Verified through component tests (shell nav, breadcrumbs, collapse persistence, unread badge, modal Escape, confirm, segmented, empty/error states) rather than a live browser session |
 

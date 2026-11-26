@@ -34,7 +34,7 @@ test.describe("InfraPilot end-to-end", () => {
   test("filters audit records by action and summary", async ({ page }) => {
     await signIn(page);
     await page.goto("/users");
-    await page.getByRole("button", { name: "Audit log", exact: true }).click();
+    await page.getByRole("tab", { name: "Audit log", exact: true }).click();
     await page.getByLabel("Filter audit by action").selectOption("auth.login");
     await page.getByLabel("Search audit log").fill("Signed in");
     await expect(page.getByText("Signed in").first()).toBeVisible();
