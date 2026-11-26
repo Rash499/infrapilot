@@ -10,6 +10,9 @@
     "types": ["node"],
     "baseUrl": ".",
     "paths": {
+      "@infrapilot/contracts": ["../../packages/contracts/src/index.ts"],
+      "@infrapilot/database": ["../../packages/database/src/index.ts"],
+      "@infrapilot/server-core": ["../../packages/server-core/src/index.ts"],
       "@/validators/*": ["../../src/validators/*"],
       "@/*": ["../../src/*"]
     }
