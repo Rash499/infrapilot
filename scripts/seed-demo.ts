@@ -356,11 +356,13 @@ async function seedMonitoring(args: Args, registry: Registry, now: Date): Promis
 
     // Presentation state. The worker will replace this with a real result on its next tick,
     // which is the honest behaviour for a live monitoring product.
+    const history = buildMonitoringHistory(spec, now);
     await updateMonitoringTargetAfterCheck(targetId, {
       status: spec.state,
       consecutiveFailures: spec.consecutiveFailures,
-      lastCheckedAt: at(now, 0.25),
-      lastResponseMs: spec.lastResponseMs,
+      // A target without history has genuinely never been checked.
+      lastCheckedAt: history.length > 0 ? at(now, 0.25) : null,
+      lastResponseMs: history.length > 0 ? spec.lastResponseMs : null,
       lastError: spec.lastError,
     });
     await markTimestamps(collections.monitoringTargets, targetId, {
@@ -370,7 +372,6 @@ async function seedMonitoring(args: Args, registry: Registry, now: Date): Promis
     // Rebuild this target's history from scratch; the rows belong to demo targets only.
     const results = await collection(collections.monitoringResults);
     await results.deleteMany({ targetId });
-    const history = buildMonitoringHistory(spec, now);
     if (history.length > 0) {
       await results.insertMany(
         history.map((point) => ({

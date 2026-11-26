@@ -68,6 +68,10 @@ function report(problemsOnly: boolean): boolean {
   for (const check of checks) {
     if (problemsOnly && check.ok) continue;
     console.log(`${check.ok ? "PASS" : "FAIL"}  ${check.name.padEnd(46)} ${check.detail}`);
+    // Surface failures as annotations: the job log endpoint is not always reachable for tooling.
+    if (!check.ok && process.env.GITHUB_ACTIONS === "true") {
+      console.log(`::error title=Demo verification failed::${check.name} — ${check.detail}`);
+    }
   }
   const failed = checks.filter((check) => !check.ok);
   console.log(`\n${checks.length - failed.length}/${checks.length} checks passed.`);
@@ -382,7 +386,7 @@ async function verifySeeded(): Promise<boolean> {
     record("demo administrator can be found by email", Boolean(admin), DEMO_USERS[0]!.email);
   }
 
-  return report(true);
+  return report(!process.argv.includes("--verbose"));
 }
 
 async function main(): Promise<number> {
