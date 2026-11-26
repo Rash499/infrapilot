@@ -15,6 +15,7 @@
     "incremental": true,
     "baseUrl": ".",
     "paths": {
+      "@infrapilot/contracts": ["../../packages/contracts/src/index.ts"],
       "@/validators/*": ["../../src/validators/*"],
       "@/lib/permissions": ["../../src/lib/permissions"],
       "@/*": ["./src/*"]
