@@ -86,7 +86,7 @@ test.describe("demo environment", () => {
     await page.getByRole("button", { name: /Edit TLS 1.0 and 1.1/ }).click();
     const dialog = page.getByRole("dialog");
     await expect(dialog.getByLabel(/Description/)).toHaveValue(/Demonstration finding created by the InfraPilot demo seeder/);
-    await expect(dialog.getByLabel(/Remediation/)).toHaveValue(/Disable TLS 1.0\/1.1 on the listener/);
+    await expect(dialog.getByLabel("Remediation recommendation")).toHaveValue(/Disable TLS 1\.0\/1\.1 on the listener/);
   });
 
   test("change requests show the approval workflow states", async ({ page }) => {
