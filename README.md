@@ -36,11 +36,17 @@ The workspace navigation is organized around these operational areas:
 | **Notifications** | Operational alerts and workspace notifications |
 | **Settings** | Application and workspace configuration |
 
-### Dashboard preview
+## Screenshots
 
-The dashboard brings key operational signals together, including registered and healthy assets, unavailable resources, monitored services, uptime, open incidents, critical/high findings, and upcoming maintenance. Monitoring activity and infrastructure health panels provide additional visibility into service performance and asset status.
+### Dashboard — operations overview
 
-> Dashboard figures are generated from the configured database and monitoring history. They are environment-specific and can change as the worker processes checks or operators update records.
+![InfraPilot dashboard overview](docs/images/dashboard-overview.jpg)
+
+### Dashboard — monitoring activity and infrastructure health
+
+![InfraPilot dashboard monitoring activity and infrastructure health](docs/images/dashboard-monitoring-health.jpg)
+
+The dashboard presents live operational indicators from the configured database, including registered assets, healthy and unavailable resources, monitored services, uptime, open incidents, security findings, maintenance schedules, monitoring history, and service health.
 
 ## Demo environment
 
