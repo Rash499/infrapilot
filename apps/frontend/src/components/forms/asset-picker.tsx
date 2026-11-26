@@ -22,12 +22,12 @@ export function AssetPicker({ value, onChange, idPrefix = "asset" }: { value: st
           <label
             key={asset.id}
             htmlFor={id}
-            className={cn("flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-surface-2", checked && "bg-sky-600/10")}
+            className={cn("flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-surface-2", checked && "bg-accent/10")}
           >
             <input
               id={id}
               type="checkbox"
-              className="size-4 accent-sky-600"
+              className="size-4 accent-[var(--accent)]"
               checked={checked}
               onChange={(e) => onChange(e.target.checked ? [...value, asset.id] : value.filter((v) => v !== asset.id))}
             />

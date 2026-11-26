@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import { Archive, ArchiveRestore, Download, Pencil, Plus, Search, Upload } from "lucide-react";
 import { AssetFormModal } from "@/components/forms/asset-form";
-import { Button, Card, ConfirmDialog, DataTable, EmptyState, ErrorState, Input, Modal, PageHeader, Pagination, Select, Td, TableSkeleton, Th, StatusBadge } from "@/components/ui";
+import { Alert, Button, Card, ConfirmDialog, DataTable, EmptyState, ErrorState, Input, Modal, PageHeader, Pagination, Segmented, Select, StatusBadge, TableSkeleton, Td, Th, Toolbar } from "@/components/ui";
 import { useAuth } from "@/context/auth-context";
 import { useToast } from "@/context/toast-context";
 import { fetchData, fetchList, getErrorMessage, sendData } from "@/lib/client/api";
@@ -169,6 +169,7 @@ export default function AssetsPage() {
   return (
     <div className="space-y-6">
       <PageHeader
+        eyebrow="Infrastructure"
         title="Infrastructure assets"
         description="Servers, virtual machines, network devices, cloud resources, containers, databases and applications."
         actions={
@@ -220,8 +221,8 @@ export default function AssetsPage() {
         </Card>
       ) : null}
 
-      <Card className="p-4">
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+      <Toolbar>
+        <div className="grid w-full gap-3 md:grid-cols-2 xl:grid-cols-5">
           <div className="relative xl:col-span-2">
             <Search className="pointer-events-none absolute left-3 top-2.5 size-4 text-muted" aria-hidden="true" />
             <Input aria-label="Search assets" placeholder="Search by name, hostname, IP or location" className="pl-9" value={search} onChange={(e) => setSearch(e.target.value)} />
@@ -251,15 +252,16 @@ export default function AssetsPage() {
             ))}
           </Select>
         </div>
-        <div className="mt-3 flex gap-2">
-          <Button variant={archived === "false" ? "primary" : "outline"} size="sm" onClick={() => setArchived("false")}>
-            Active
-          </Button>
-          <Button variant={archived === "true" ? "primary" : "outline"} size="sm" onClick={() => setArchived("true")}>
-            Archived
-          </Button>
-        </div>
-      </Card>
+        <Segmented
+          label="Inventory scope"
+          value={archived}
+          onChange={setArchived}
+          options={[
+            { value: "false", label: "Active" },
+            { value: "true", label: "Archived" },
+          ]}
+        />
+      </Toolbar>
 
       <Card className="overflow-hidden">
         {list.error && !list.data ? <ErrorState message={list.error} onRetry={reload} /> : null}
@@ -312,9 +314,9 @@ export default function AssetsPage() {
               </thead>
               <tbody>
                 {list.data.items.map((asset) => (
-                  <tr key={asset.id} className="hover:bg-surface-2/50">
+                  <tr key={asset.id} className="row-hover">
                     <Td>
-                      <Link href={`/assets/${asset.id}`} className="font-medium text-sky-500 hover:underline">
+                      <Link href={`/assets/${asset.id}`} className="font-medium text-accent hover:underline">
                         {asset.name}
                       </Link>
                     </Td>
@@ -403,14 +405,16 @@ export default function AssetsPage() {
               Required columns: <code>name</code>, <code>assetType</code>, <code>environment</code>. Optional columns: hostname, ipAddress, operatingSystem, location, ownerId, description, status.
             </p>
             {importPreview.errors.length > 0 ? (
-              <div role="alert" className="rounded-md border border-rose-500/30 bg-rose-500/10 p-3 text-rose-500">
-                <p className="font-medium">{importPreview.errors.length} row{importPreview.errors.length === 1 ? "" : "s"} need correction. No assets will be imported.</p>
-                <ul className="mt-2 max-h-48 space-y-1 overflow-y-auto">
+              <Alert tone="danger" title={`${importPreview.errors.length} row${importPreview.errors.length === 1 ? "" : "s"} need correction`}>
+                <p>No assets will be imported until every listed row is fixed.</p>
+                <ul className="mt-2 max-h-48 list-disc space-y-1 overflow-y-auto pl-4">
                   {importPreview.errors.map((error) => (
-                    <li key={`${error.rowNumber}-${error.message}`}>Row {error.rowNumber}: {error.message}</li>
+                    <li key={`${error.rowNumber}-${error.message}`}>
+                      Row {error.rowNumber}: {error.message}
+                    </li>
                   ))}
                 </ul>
-              </div>
+              </Alert>
             ) : null}
           </div>
         ) : null}

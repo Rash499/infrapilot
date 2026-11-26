@@ -2,8 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
-import { Moon, Sun, UserCircle, KeyRound, Palette } from "lucide-react";
-import { Alert, Button, Card, ConfirmDialog, EmptyState, ErrorState, Field, Input, PageHeader, Skeleton, StatusBadge, cn } from "@/components/ui";
+import { UserCircle, KeyRound, Palette } from "lucide-react";
+import { Alert, Button, Card, ConfirmDialog, EmptyState, ErrorState, Field, Input, PageHeader, Segmented, Skeleton, StatusBadge } from "@/components/ui";
 import { useAuth } from "@/context/auth-context";
 import { useTheme } from "@/context/theme-context";
 import { useToast } from "@/context/toast-context";
@@ -82,12 +82,16 @@ export default function SettingsPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Settings" description="Manage your profile, password and display preferences." />
+      <PageHeader
+        eyebrow="Workspace"
+        title="Settings"
+        description="Manage your profile, password and display preferences."
+      />
 
       <div className="grid gap-6 xl:grid-cols-2">
         <Card className="p-5">
           <h2 className="flex items-center gap-2 text-sm font-semibold text-fg">
-            <UserCircle className="size-4 text-sky-500" aria-hidden="true" /> Profile
+            <UserCircle className="size-4 text-accent" aria-hidden="true" /> Profile
           </h2>
           <form onSubmit={saveProfile} className="mt-4 space-y-4" noValidate>
             {profileError ? <Alert tone="danger">{profileError}</Alert> : null}
@@ -120,7 +124,7 @@ export default function SettingsPage() {
 
         <Card className="p-5">
           <h2 className="flex items-center gap-2 text-sm font-semibold text-fg">
-            <KeyRound className="size-4 text-sky-500" aria-hidden="true" /> Change password
+            <KeyRound className="size-4 text-accent" aria-hidden="true" /> Change password
           </h2>
           <form onSubmit={changePw} className="mt-4 space-y-4" noValidate>
             {passwordError ? <Alert tone="danger">{passwordError}</Alert> : null}
@@ -183,21 +187,19 @@ export default function SettingsPage() {
 
       <Card className="p-5">
         <h2 className="flex items-center gap-2 text-sm font-semibold text-fg">
-          <Palette className="size-4 text-sky-500" aria-hidden="true" /> Appearance
+          <Palette className="size-4 text-accent" aria-hidden="true" /> Appearance
         </h2>
         <p className="mt-1 text-sm text-muted">Dark theme is the default. Your choice is stored in this browser.</p>
-        <div className="mt-4 flex gap-2" role="group" aria-label="Theme">
-          {(
-            [
-              ["dark", "Dark", Moon],
-              ["light", "Light", Sun],
-            ] as const
-          ).map(([value, label, Icon]) => (
-            <Button key={value} variant={theme === value ? "primary" : "outline"} aria-pressed={theme === value} onClick={() => setTheme(value)}>
-              <Icon className={cn("size-4")} aria-hidden="true" />
-              {label}
-            </Button>
-          ))}
+        <div className="mt-4">
+          <Segmented
+            label="Theme"
+            value={theme}
+            onChange={setTheme}
+            options={[
+              { value: "dark", label: "Dark" },
+              { value: "light", label: "Light" },
+            ]}
+          />
         </div>
       </Card>
 

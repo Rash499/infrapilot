@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { Activity, Pencil, Play, Plus, Search, Trash2 } from "lucide-react";
 import { ResponseTrendChart, type TrendPoint } from "@/components/charts";
-import { Badge, Button, Card, Checkbox, ConfirmDialog, DataTable, EmptyState, ErrorState, Field, Input, Modal, PageHeader, Pagination, Select, StatCard, StatusBadge, StatusDot, TableSkeleton, Td, Th } from "@/components/ui";
+import { Alert, Badge, Button, Card, CardHeader, Checkbox, ConfirmDialog, DataTable, EmptyState, ErrorState, Field, FormSection, Input, Modal, PageHeader, Pagination, Select, StatCard, StatusBadge, StatusDot, TableSkeleton, Td, Th, Toolbar } from "@/components/ui";
 import { useAuth } from "@/context/auth-context";
 import { useToast } from "@/context/toast-context";
 import { fetchData, fetchList, getErrorMessage, sendData, validatePayload } from "@/lib/client/api";
@@ -114,22 +114,19 @@ function MonitorFormModal({
         </>
       }
     >
-      <form id="monitor-form" onSubmit={onSubmit} className="grid gap-4 sm:grid-cols-2" noValidate>
-        {errors.root?.message ? (
-          <p role="alert" className="rounded-md border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-500 sm:col-span-2">
-            {errors.root.message}
-          </p>
-        ) : null}
-        <Field label="Name *" htmlFor="m-name" className="sm:col-span-2">
+      <form id="monitor-form" onSubmit={onSubmit} className="space-y-5" noValidate>
+        {errors.root?.message ? <Alert tone="danger">{errors.root.message}</Alert> : null}
+        <FormSection title="Target">
+        <Field label="Name" htmlFor="m-name" className="sm:col-span-2" required>
           <Input id="m-name" {...register("name", { required: "Name is required" })} placeholder="Checkout API health" />
         </Field>
-        <Field label="Check type *" htmlFor="m-type">
+        <Field label="Check type" htmlFor="m-type" required>
           <Select id="m-type" {...register("monitorType")}>
             <option value="http">HTTP / HTTPS endpoint</option>
             <option value="tcp">TCP connectivity</option>
           </Select>
         </Field>
-        <Field label="Linked asset" htmlFor="m-asset">
+        <Field label="Linked asset" htmlFor="m-asset" hint="Rolls check state up to the asset status.">
           <Select id="m-asset" {...register("assetId")}>
             <option value="">Not linked</option>
             {assets.map((a) => (
@@ -158,6 +155,8 @@ function MonitorFormModal({
             </Field>
           </>
         )}
+        </FormSection>
+        <FormSection title="Schedule and thresholds" description="Defaults apply when a value is left empty.">
         <Field label="Interval (seconds)" htmlFor="m-interval" hint="30 – 86,400">
           <Input id="m-interval" type="number" min={30} max={86400} {...register("intervalSeconds")} />
         </Field>
@@ -173,6 +172,7 @@ function MonitorFormModal({
             <Checkbox id="m-private" label="Authorise private network targets (admin)" {...register("allowPrivateNetwork")} />
           ) : null}
         </div>
+        </FormSection>
       </form>
     </Modal>
   );
@@ -214,18 +214,27 @@ function TargetDetailModal({ id, onClose, onEdit }: { id: string | null; onClose
             {t.lastError ? <span className="text-sm text-rose-500">{t.lastError}</span> : null}
             {!t.enabled ? <Badge>Paused</Badge> : null}
           </div>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <StatCard label="Uptime 24h" value={fmtPct(t.stats.uptime24hPct)} />
-            <StatCard label="Uptime 7d" value={fmtPct(t.stats.uptime7dPct)} />
-            <StatCard label="Avg response 24h" value={fmtMs(t.stats.avgResponse24hMs)} />
-            <StatCard label="Checks 24h" value={t.stats.checks24h} />
-          </div>
-          <Card className="p-4">
-            <h3 className="mb-3 text-sm font-semibold text-fg">Response time (last 24 hours)</h3>
-            <ResponseTrendChart data={points} height={220} />
+          <dl className="grid grid-cols-2 divide-line overflow-hidden rounded-lg border border-line sm:grid-cols-4 sm:divide-x">
+            {[
+              { label: "Uptime 24h", value: fmtPct(t.stats.uptime24hPct) },
+              { label: "Uptime 7d", value: fmtPct(t.stats.uptime7dPct) },
+              { label: "Avg response", value: fmtMs(t.stats.avgResponse24hMs) },
+              { label: "Checks 24h", value: String(t.stats.checks24h) },
+            ].map((stat) => (
+              <div key={stat.label} className="border-b border-line px-3 py-2.5 last:border-b-0 sm:border-b-0">
+                <dt className="text-2xs font-medium uppercase tracking-[0.06em] text-muted">{stat.label}</dt>
+                <dd className="tabular-nums mt-0.5 text-base font-semibold text-fg">{stat.value}</dd>
+              </div>
+            ))}
+          </dl>
+          <Card className="overflow-hidden">
+            <CardHeader title="Response time" description="Last 24 hours, one point per check" icon={Activity} />
+            <div className="p-3">
+              <ResponseTrendChart data={points} height={220} />
+            </div>
           </Card>
           <Card>
-            <div className="border-b border-line px-4 py-3 text-sm font-semibold text-fg">Recent results</div>
+            <CardHeader title="Recent results" description={`${t.recentResults.length} most recent checks`} icon={Activity} />
             <DataTable minWidth={520}>
               <thead>
                 <tr>
@@ -237,7 +246,7 @@ function TargetDetailModal({ id, onClose, onEdit }: { id: string | null; onClose
               </thead>
               <tbody>
                 {t.recentResults.map((r) => (
-                  <tr key={r.id}>
+                  <tr key={r.id} className="row-hover">
                     <Td className="whitespace-nowrap text-muted">{fmtRelative(r.checkedAt)}</Td>
                     <Td>
                       <StatusBadge value={r.state} />
@@ -335,6 +344,7 @@ export default function MonitoringPage() {
   return (
     <div className="space-y-6">
       <PageHeader
+        eyebrow="Infrastructure"
         title="Monitoring"
         description="Active HTTP and TCP checks executed by the background worker. Results refresh every 30 seconds."
         actions={
@@ -368,8 +378,8 @@ export default function MonitoringPage() {
         </div>
       ) : null}
 
-      <Card className="p-4">
-        <div className="grid gap-3 md:grid-cols-3">
+      <Toolbar>
+        <div className="grid w-full gap-3 md:grid-cols-3">
           <div className="relative">
             <Search className="pointer-events-none absolute left-3 top-2.5 size-4 text-muted" aria-hidden="true" />
             <Input aria-label="Search checks" className="pl-9" placeholder="Search by name, host or URL" value={search} onChange={(e) => setSearch(e.target.value)} />
@@ -387,7 +397,7 @@ export default function MonitoringPage() {
             <option value="tcp">TCP</option>
           </Select>
         </div>
-      </Card>
+      </Toolbar>
 
       <Card className="overflow-hidden">
         {list.error && !list.data ? <ErrorState message={list.error} onRetry={list.reload} /> : null}
@@ -422,9 +432,9 @@ export default function MonitoringPage() {
               </thead>
               <tbody>
                 {list.data.items.map((t) => (
-                  <tr key={t.id} className="hover:bg-surface-2/50">
+                  <tr key={t.id} className="row-hover">
                     <Td>
-                      <button type="button" onClick={() => setDetailId(t.id)} className="flex items-center gap-2 text-left font-medium text-sky-500 hover:underline">
+                      <button type="button" onClick={() => setDetailId(t.id)} className="flex items-center gap-2 text-left font-medium text-accent hover:underline">
                         <StatusDot value={t.enabled ? t.status : "unknown"} />
                         {t.name}
                       </button>

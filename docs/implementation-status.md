@@ -71,9 +71,9 @@ This is a repository inspection snapshot, not a claim that every listed capabili
 | Workspace migration | Implemented | Frontend, backend, worker, contracts, database and server-core package manifests and TypeScript configs |
 | Architecture and deployment docs | Updated | `docs/architecture.md`, `docs/full-system-architecture.md`, `docs/deployment.md`, and migration status |
 | CI configuration | Updated; live workflow pending | `.github/workflows/ci.yml` provisions isolated MongoDB `rs0` for E2E |
-| Local lint | Passed | 0 errors; 19 existing frontend warnings |
+| Local lint | Passed | 0 errors; 20 existing frontend warnings (all `react-hooks/set-state-in-effect` advisories in auth/async-fetch effects) |
 | Workspace typecheck and production build | Passed | `npm run build` (typechecks every workspace, then builds frontend) |
-| Unit / component tests | Passed | `npm test`: 98 tests across 14 files |
+| Unit / component tests | Passed | `npm test`: 109 tests across 16 files |
 | Live MongoDB replica-set / Playwright E2E | Not run | No isolated MongoDB replica set or CI result verified in this environment |
 | Importer snapshot validation | Not run | Requires a non-production PostgreSQL snapshot |
 | Production deployment | Not deployed | No deployment environment configured |
