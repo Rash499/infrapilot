@@ -25,7 +25,7 @@ jobs:
         run: npm run lint
       - name: Type generation and type check
         run: |
-          npx next typegen
+          npx next typegen apps/frontend
           npm run typecheck
       - name: Unit and component tests
         run: npm test
