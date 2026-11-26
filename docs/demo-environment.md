@@ -235,6 +235,22 @@ are closed.
 After cleanup, `npm run db:verify:demo -- --expect-empty` asserts that no demo record remains in any
 collection.
 
+### Verification status
+
+| Check | Result |
+| --- | --- |
+| `npm run lint` | pass (0 errors, 20 pre-existing `react-hooks` warnings) |
+| `npm run typecheck` / `npm run typecheck:demo` | pass |
+| `npm test` | pass — 20 files, including 18 dataset/history tests |
+| `npm run build` | pass (18 routes) |
+| `npm run db:seed:demo:dry-run` | pass — 28 assets, 12 targets, 744 history points validated, nothing written |
+| Seed twice → verify → cleanup → expect-empty → re-seed | pass in CI (GitHub Actions, MongoDB replica set) |
+| Playwright suite incl. `demo-environment.spec.ts` | pass in CI (15 tests) |
+
+Local runs of the seed, verifier and browser suite require MongoDB and Docker, which the development
+sandbox used to author this change did not have; those steps are executed by CI on every pull
+request (`End-to-end (Playwright)` job), not claimed as locally executed.
+
 `e2e/demo-environment.spec.ts` renders the same data through the browser (dashboard attention list,
 asset detail with its linked monitor, monitoring states, incident timeline, finding edit dialog,
 change statuses, maintenance, notifications, user directory and the read-only viewer). It is skipped
