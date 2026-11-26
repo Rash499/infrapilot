@@ -4,8 +4,8 @@ import express, { type NextFunction, type Request, type Response } from "express
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import swaggerUi from "swagger-ui-express";
-import { dispatch } from "@infrapilot/server-core";
-import { getMongoDb } from "@infrapilot/database";
+import { dispatch } from "./routes";
+import { getMongoDb, getWorkerHealth } from "@infrapilot/database";
 import { openApiSpecification } from "./openapi";
 
 const app = express();
@@ -45,6 +45,18 @@ app.get("/health/ready", async (_req, res) => {
   }
 });
 app.get("/health", (_req, res) => res.json({ status: "ok" }));
+app.get("/health/worker", async (_req, res) => {
+  try {
+    const health = await getWorkerHealth();
+    res.status(health.status === "ok" ? 200 : 503).json(health);
+  } catch {
+    console.error(JSON.stringify({
+      event: "worker_readiness_failed",
+      requestId: res.locals.requestId,
+    }));
+    res.status(503).json({ status: "unavailable", activeWorkers: 0, lastHeartbeatAt: null });
+  }
+});
 app.get("/api/health", async (_req, res) => {
   try {
     const db = await getMongoDb();

@@ -1,6 +1,7 @@
 {
   "name": "@infrapilot/frontend",
   "private": true,
+  "version": "0.1.0",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -10,6 +11,7 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
+    "@infrapilot/contracts": "*",
     "@hookform/resolvers": "^7.0.7",
     "axios": "^1.21.1",
     "lucide-react": "^1.77.0",

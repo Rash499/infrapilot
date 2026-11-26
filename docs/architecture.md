@@ -9,11 +9,12 @@ incident response, maintenance scheduling, and change management behind one role
 
 | Concern | Choice | Rationale |
 | --- | --- | --- |
-| Application framework | Next.js 16 (App Router) | One deployable unit for UI and REST API; route handlers keep `/api/v1` close to the UI |
+| Frontend | Next.js 16 (App Router) | Standalone UI with a same-origin API proxy |
+| Backend | Express 5 REST API | Independently deployable API at `/api/v1` |
 | Language | TypeScript (strict) | Shared Zod schemas between browser and server |
 | Primary database | MongoDB 8 (`rs0`) | Document persistence and replica-set transactions |
 | Data access | MongoDB Node.js Driver 6 + repositories | Typed collection access and explicit indexes |
-| Compatibility database | PostgreSQL 16 + Drizzle ORM | Legacy fallback and one-time data import; removal is pending cutover validation |
+| Legacy migration tooling | PostgreSQL + Drizzle ORM | Optional one-time importer only; application runtime uses MongoDB |
 | Validation | Zod 4 | Identical rules in forms (client) and handlers (server) |
 | Auth tokens | `jose` (HS256 JWT) | Maintained, standards-compliant JOSE implementation |
 | Password hashing | scrypt (Node `crypto`) | Memory-hard KDF with no native dependency; interchangeable with Argon2id later |
@@ -28,32 +29,26 @@ incident response, maintenance scheduling, and change management behind one role
 
 ```
 HTTP request
-  └─ app/api/v1/[...segments]/route.ts     Next.js entry point (thin)
-       └─ routes/index.ts                  dispatcher: origin check, route matching, param validation,
-                                           error mapping (toErrorResponse), access log
-            └─ controllers/*.controller.ts HTTP adapters: authorise → parse/validate → call service → respond
-                 └─ services/*.service.ts  business rules, transactions, notifications, audit
-                      └─ db repositories   MongoDB collections and domain repositories
+  └─ apps/frontend/app/api/v1/[...segments]/route.ts  same-origin proxy
+       └─ apps/backend/src/app.ts                     Express middleware and HTTP health
+            └─ apps/backend/src/routes/               route matching and request dispatch
+                 └─ apps/backend/src/controllers/     authorization, validation and response mapping
+                      └─ packages/server-core/        business rules, transactions, audit and notifications
+                           └─ packages/database/      MongoDB collections and repositories
 ```
 
 Supporting modules:
 
-- `src/lib/http.ts` — `ApiError`, JSON envelopes, pagination metadata, safe error conversion.
-- `src/lib/auth.ts` — bearer verification against the database (role and active-state are re-read each request), role matrix, refresh cookie helpers, anti-CSRF header check.
-- `src/lib/security.ts` — password hashing, JWT issue/verify, token hashing, fixed-window rate limiter.
-- `src/lib/ssrf.ts` — URL parsing and network-destination policy.
-- `src/lib/logger.ts` — structured JSON logs with recursive redaction of sensitive keys.
-- `src/validators/schemas.ts` — every request body, query and transition rule.
-- `src/workers/` — probe engine, state machine, scheduler, standalone worker entry point.
-- `src/instrumentation.ts` — starts the scheduler inside the web process unless disabled.
+- `packages/server-core/src/lib/` — HTTP errors, auth, security, SSRF policy, environment validation and structured logs.
+- `packages/contracts/src/` — browser-safe API types, Zod validators and role permissions.
+- `apps/worker/src/` — independent scheduler, probe runner and health endpoint.
+- `packages/database/src/` — MongoDB connection, idempotent collection/index bootstrap, documents and repositories.
 
 ### Why controllers and routes are split this way
 
-The spec asks for separate routes, controllers, services, and middleware. In the Next.js App Router the
-file-system route is a single catch-all handler, so routing is expressed as a declarative table
-(`src/routes/index.ts` plus one `RouteDef[]` per module). Authentication and authorisation are invoked
-explicitly by each controller through `authorize(req, "read" | "write" | "admin")`, which is the middleware
-equivalent in this framework. No business logic lives in controllers or route files.
+The frontend catch-all route proxies same-origin API requests to the independent Express backend.
+Express routes and controllers dispatch validated requests to shared services; authentication and
+authorization are applied before business logic. No business logic lives in frontend route handlers.
 
 ## 4. Frontend structure
 
@@ -115,8 +110,8 @@ Key constraints and policies:
 | `audit_logs` | index `(entity_type, entity_id)`, `created_at`, `actor_id` | Actor set null; rows are never updated |
 
 `npm run db:init:mongo` idempotently creates MongoDB collections, indexes, and sequence counters without
-dropping data. `scripts/migrate-data.ts` is the one-time PostgreSQL importer; PostgreSQL/Drizzle fallback
-code and migration files remain until the final runtime cutover has been verified.
+dropping data. `scripts/migrate-data.ts` is an optional one-time PostgreSQL importer; PostgreSQL/Drizzle
+code is isolated to that migration tooling and is not imported by runtime workspaces.
 
 ## 6. Monitoring design
 
@@ -132,8 +127,9 @@ code and migration files remain until the final runtime cutover has been verifie
 5. **State.** `computeState` is a pure function: healthy, degraded (slow or first failures), unavailable
    (≥ `MONITOR_FAILURE_THRESHOLD` consecutive failures), unknown (never checked).
 6. **Side effects.** Results are inserted, the target row is updated, state transitions create in-app
-   notifications, and linked asset status is rolled up from its monitors. Assets with no monitors keep their
-   manually maintained status, so registering an asset never implies monitoring.
+   notifications, and linked asset status is rolled up from its monitors. Worker instances persist their
+   heartbeats in `worker_statuses`, exposed through `/health/ready` on the worker and `/health/worker` on
+   the backend. Assets with no monitors keep their manually maintained status.
 
 ## 7. Security architecture
 
@@ -149,7 +145,7 @@ code and migration files remain until the final runtime cutover has been verifie
 | Origin checks | Non-GET requests with an `Origin` header must match the request origin or `APP_ORIGIN` |
 | Authorisation | Role checked on every endpoint against the database value (`viewer` < `operator` < `admin`); self-demotion and self-deactivation blocked |
 | Input validation | Zod for bodies, queries, path identifiers (UUID), enum values, lengths, URL schemes |
-| Database query safety | MongoDB driver filters are structured values; SQL compatibility queries are parameterised and search wildcards escaped |
+| Database query safety | Runtime MongoDB driver filters are structured values; the isolated legacy importer uses bound ORM queries |
 | SSRF | Scheme allow-list, credential rejection, DNS resolution with full address-class policy, metadata endpoints always blocked, private ranges only with admin authorisation per target, pinned connections |
 | Rate limiting | Fixed window per IP on login, registration, refresh, password reset and change |
 | Headers | Helmet-equivalent headers in `next.config.ts`: CSP, frame-ancestors none, nosniff, referrer policy, permissions policy, COOP/CORP, HSTS in production |

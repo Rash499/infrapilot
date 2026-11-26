@@ -1,4 +1,4 @@
-import "../../../src/lib/load-env";
+import "@infrapilot/server-core/load-env";
 import { app } from "./app";
 import { closeMongo, ensureMongoIndexes } from "@infrapilot/database";
 

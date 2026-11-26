@@ -9,7 +9,7 @@
  *   npx tsx scripts/migrate-data.ts             # ensure indexes and migrate data into MONGODB_URI / MONGODB_DB
  */
 
-import "../src/lib/load-env";
+import "@infrapilot/server-core/load-env";
 import type { AnyBulkWriteOperation, Document } from "mongodb";
 import { db, pool } from "@/db";
 import * as pg from "@/db/schema";

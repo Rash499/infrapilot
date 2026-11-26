@@ -2,6 +2,6 @@
 
 The application uses the existing `infrapilot` database and MongoDB replica set `rs0`.
 
-MongoDB 8 repository code, collection definitions, and index initialization remain in `src/db`. The shared package entry point is `packages/database/src/index.ts`.
+MongoDB 8 connection, collection definitions, repositories, and index initialization live in `packages/database/src`.
 
-No existing collections or documents are recreated or renamed. PostgreSQL migration code is retained only in `scripts/migrate-data.ts` for one-time legacy data preservation.
+No existing collections or documents are dropped or renamed. The `worker_statuses` collection stores independent worker heartbeats. PostgreSQL schema/driver code is isolated under `scripts/migration/postgres` and is retained only for the optional, idempotent one-time importer in `scripts/migrate-data.ts`.

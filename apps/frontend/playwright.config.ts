@@ -26,6 +26,13 @@ export default defineConfig({
           timeout: 120_000,
         },
         {
+          command: "npm run start -w apps/worker",
+          cwd: "../..",
+          url: "http://127.0.0.1:4010/health/ready",
+          reuseExistingServer: !process.env.CI,
+          timeout: 120_000,
+        },
+        {
           command: "npm run start",
           url: `${baseURL}/api/health`,
           reuseExistingServer: !process.env.CI,

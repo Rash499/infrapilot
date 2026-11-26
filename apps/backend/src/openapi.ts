@@ -1,4 +1,4 @@
-import { getApiRouteDefinitions } from "@infrapilot/server-core";
+import { getApiRouteDefinitions } from "./routes";
 
 const publicEndpoints = new Set([
   "POST /auth/register",

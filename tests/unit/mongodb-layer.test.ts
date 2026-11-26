@@ -14,10 +14,12 @@ import {
   nextSequenceValue,
   insertMaintenanceWithAssets,
   rotateRefreshTokenDoc,
+  listIncidents,
   createSecurityFinding,
   createIncident,
   createChangeRequest,
   decideChangeRequest,
+  getWorkerHealth,
 } from "@/db/repositories";
 
 const mockState = vi.hoisted(() => ({
@@ -43,12 +45,20 @@ function compareValues(left: unknown, right: unknown): number | null {
 
 function matches(doc: Record<string, unknown>, filter: Record<string, unknown>): boolean {
   return Object.entries(filter).every(([key, expected]) => {
+    if (key === "$and" && Array.isArray(expected)) {
+      return expected.every((condition) => matches(doc, condition as Record<string, unknown>));
+    }
     const actual = doc[key];
     if (typeof expected === "object" && expected !== null) {
       if ("$in" in expected) return (expected.$in as unknown[]).includes(actual);
+      if ("$nin" in expected) return !(expected.$nin as unknown[]).includes(actual);
       if ("$gt" in expected) {
         const comparison = compareValues(actual, expected.$gt);
         return comparison !== null && comparison > 0;
+      }
+      if ("$gte" in expected) {
+        const comparison = compareValues(actual, expected.$gte);
+        return comparison !== null && comparison >= 0;
       }
     }
     return actual === expected;
@@ -69,6 +79,7 @@ function makeMockCollection(name: string) {
     findOne: vi.fn(async (filter: Record<string, unknown>) => store.find((doc) => matches(doc, filter)) ?? null),
     find: vi.fn((filter: Record<string, unknown>) => {
       let sortSpec: Record<string, 1 | -1> = {};
+      let skip = 0;
       let limit = store.length;
       const cursor = {
         sort(spec: Record<string, 1 | -1>) {
@@ -77,6 +88,10 @@ function makeMockCollection(name: string) {
         },
         limit(count: number) {
           limit = count;
+          return cursor;
+        },
+        skip(count: number) {
+          skip = count;
           return cursor;
         },
         async toArray() {
@@ -91,7 +106,7 @@ function makeMockCollection(name: string) {
               return 0;
             });
           }
-          return rows.slice(0, limit).map((doc) => ({ ...doc }));
+          return rows.slice(skip, skip + limit).map((doc) => ({ ...doc }));
         },
       };
       return cursor;
@@ -122,14 +137,7 @@ function makeMockCollection(name: string) {
       return { matchedCount, modifiedCount };
     }),
     countDocuments: vi.fn(async (filter: Record<string, unknown>) => {
-      return store.filter((doc) =>
-        Object.entries(filter).every(([key, expected]) => {
-          if (typeof expected === "object" && expected !== null && "$in" in expected) {
-            return (expected as { $in: unknown[] }).$in.includes(doc[key]);
-          }
-          return doc[key] === expected;
-        }),
-      ).length;
+      return store.filter((doc) => matches(doc, filter)).length;
     }),
     findOneAndDelete: vi.fn(async (filter: Record<string, unknown>) => {
       const index = store.findIndex((doc) => Object.entries(filter).every(([key, value]) => doc[key] === value));
@@ -170,10 +178,10 @@ vi.mock("@/db/collections", async (importOriginal) => {
 });
 
 describe("MongoDB collection registry & index manifest", () => {
-  it("registers all 19 InfraPilot collections consistently across collections.ts and app_db.ts", () => {
+  it("registers all 20 InfraPilot collections consistently across collections.ts and app_db.ts", () => {
     const registryNames = Object.values(collections).sort();
     const bootstrapNames = [...appDbCollectionNames].sort();
-    expect(registryNames).toHaveLength(19);
+    expect(registryNames).toHaveLength(20);
     expect(registryNames).toEqual(bootstrapNames);
   });
 
@@ -194,6 +202,39 @@ describe("MongoDB collection registry & index manifest", () => {
   it("allocates monotonically increasing sequence values", async () => {
     expect(await nextSequenceValue("incident_number")).toBe(1);
     expect(await nextSequenceValue("incident_number")).toBe(2);
+  });
+
+  it("reports only running workers with a fresh heartbeat", async () => {
+    const now = new Date("2026-01-01T00:00:00.000Z");
+    mockState.docs.set(collections.workerStatuses, [
+      { id: "fresh", status: "running", heartbeatAt: new Date(now.getTime() - 10_000) },
+      { id: "stale", status: "running", heartbeatAt: new Date(now.getTime() - 60_000) },
+      { id: "stopped", status: "stopped", heartbeatAt: now },
+    ]);
+
+    await expect(getWorkerHealth(30_000, now)).resolves.toEqual({
+      status: "ok",
+      activeWorkers: 1,
+      lastHeartbeatAt: "2025-12-31T23:59:50.000Z",
+    });
+  });
+
+  it("combines incident status and active filters instead of overwriting one", async () => {
+    mockState.docs.set(collections.incidents, [
+      { id: "open", status: "open", openedAt: new Date("2026-01-03T00:00:00Z") },
+      { id: "closed", status: "closed", openedAt: new Date("2026-01-02T00:00:00Z") },
+    ]);
+
+    const result = await listIncidents({
+      page: 1,
+      pageSize: 10,
+      status: "closed",
+      active: "true",
+      sort: "openedAt",
+      order: "desc",
+    });
+
+    expect(result).toEqual({ items: [], total: 0 });
   });
 });
 
