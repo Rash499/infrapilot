@@ -57,8 +57,9 @@ test.describe("demo environment", () => {
     await page.goto("/monitoring");
 
     await page.getByLabel("Search checks").fill("prd-db-02");
-    await expect(page.getByText("prd-db-02 replica PostgreSQL (TCP)")).toBeVisible();
-    await expect(page.getByText("Unavailable").first()).toBeVisible();
+    const unavailableRow = page.getByRole("row").filter({ hasText: "prd-db-02 replica PostgreSQL (TCP)" });
+    await expect(unavailableRow).toBeVisible();
+    await expect(unavailableRow.getByText("Unavailable")).toBeVisible();
 
     await page.getByLabel("Search checks").fill("prd-win-files-01");
     await expect(page.getByText("prd-win-files-01 WinRM (HTTP)")).toBeVisible();
@@ -94,13 +95,16 @@ test.describe("demo environment", () => {
     await signIn(page, adminEmail);
     await page.goto("/changes");
 
+    // Scope to the table row: the status filter also contains these words as (hidden) options.
     await page.getByLabel("Search changes").fill("PostgreSQL 16.4");
-    await expect(page.getByText("Upgrade prd-db-01 to PostgreSQL 16.4")).toBeVisible();
-    await expect(page.getByText("Pending approval").first()).toBeVisible();
+    const pendingRow = page.getByRole("row").filter({ hasText: "Upgrade prd-db-01 to PostgreSQL 16.4" });
+    await expect(pendingRow).toBeVisible();
+    await expect(pendingRow.getByText("Pending approval")).toBeVisible();
 
     await page.getByLabel("Search changes").fill("Deploy checkout service release");
-    await expect(page.getByText("Deploy checkout service release 2026.7.2")).toBeVisible();
-    await expect(page.getByText("Approved").first()).toBeVisible();
+    const approvedRow = page.getByRole("row").filter({ hasText: "Deploy checkout service release 2026.7.2" });
+    await expect(approvedRow).toBeVisible();
+    await expect(approvedRow.getByText("Approved")).toBeVisible();
   });
 
   test("maintenance page shows scheduled and running windows", async ({ page }) => {
@@ -108,8 +112,9 @@ test.describe("demo environment", () => {
     await page.goto("/maintenance");
 
     await expect(page.getByText("Monthly Windows security patching")).toBeVisible();
-    await expect(page.getByText("Backup verification and restore test")).toBeVisible();
-    await expect(page.getByText("In progress").first()).toBeVisible();
+    const runningRow = page.getByRole("row").filter({ hasText: "Backup verification and restore test" });
+    await expect(runningRow).toBeVisible();
+    await expect(runningRow.getByText("In progress")).toBeVisible();
   });
 
   test("notifications are addressed to the demo administrator", async ({ page }) => {
