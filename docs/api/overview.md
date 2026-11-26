@@ -16,4 +16,4 @@ Existing feature routes include:
 - `/settings/*`
 - `/audit/*`
 
-The frontend proxies `/api/v1` through Next.js or calls `NEXT_PUBLIC_API_URL` directly. Health endpoints are available at `/api/health` on the backend and `/api/health` on the frontend proxy.
+The frontend proxies `/api/v1` through Next.js or calls `NEXT_PUBLIC_API_URL` directly. Backend liveness is available at `/health/live`; readiness (including MongoDB connectivity) is available at `/health/ready`. `/api/health` remains as a compatibility readiness endpoint and is proxied by the frontend.

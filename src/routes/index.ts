@@ -20,6 +20,10 @@ const ROUTES: RouteDef[] = [
   ...opsRoutes,
 ].sort((a, b) => b.path.split("/").filter((s) => !s.startsWith(":")).length - a.path.split("/").filter((s) => !s.startsWith(":")).length);
 
+export function getApiRouteDefinitions(): Array<Pick<RouteDef, "method" | "path">> {
+  return ROUTES.map(({ method, path }) => ({ method, path }));
+}
+
 type Match = { route: RouteDef; params: Record<string, string> } | "method" | null;
 
 function matchRoute(method: string, segments: string[]): Match {

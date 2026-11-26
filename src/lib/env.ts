@@ -19,7 +19,7 @@ const envSchema = z.object({
     .transform((v) => v === "true"),
   INFRAPILOT_EMBEDDED_WORKER: z
     .enum(["true", "false"])
-    .default("true")
+    .default("false")
     .transform((v) => v === "true"),
   MONITOR_TICK_MS: z.coerce.number().int().min(1000).max(60000).default(5000),
   MONITOR_MAX_CONCURRENCY: z.coerce.number().int().min(1).max(50).default(5),
