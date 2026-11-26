@@ -39,4 +39,24 @@ function walk(suite) {
 }
 
 for (const suite of report.suites ?? []) walk(suite);
+
+// Report-level errors cover failures that happen before or around the tests (web servers, reporters).
+for (const error of report.errors ?? []) {
+  const message = clean(error.message ?? error);
+  if (message) {
+    failures += 1;
+    console.log(`::error title=Playwright run error::${message}`);
+  }
+}
+
+const stats = report.stats ?? {};
+console.log(
+  `::notice title=Playwright summary::${JSON.stringify({
+    expected: stats.expected ?? 0,
+    unexpected: stats.unexpected ?? 0,
+    flaky: stats.flaky ?? 0,
+    skipped: stats.skipped ?? 0,
+    durationMs: stats.duration ?? 0,
+  })}`,
+);
 console.log(`Reported ${failures} failing test(s) from ${file}.`);

@@ -107,7 +107,11 @@ jobs:
           npm run test:e2e -- --reporter=list,json,html 2>&1 | tee /tmp/playwright.txt
       - name: Report end-to-end failures
         if: failure()
-        run: node scripts/report-e2e-failures.mjs /tmp/playwright.json
+        run: |
+          node scripts/report-e2e-failures.mjs /tmp/playwright.json
+          echo "::group::Playwright output tail"
+          tail -25 /tmp/playwright.txt
+          echo "::endgroup::"
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
