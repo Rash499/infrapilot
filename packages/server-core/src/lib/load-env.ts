@@ -10,5 +10,5 @@ import path from "node:path";
  * reads `process.env` at import time, for example `@/db`.
  */
 for (const file of [".env.local", ".env"]) {
-  config({ path: path.resolve(__dirname, `../../${file}`), quiet: true });
+  config({ path: path.resolve(__dirname, `../../../../${file}`), quiet: true });
 }
