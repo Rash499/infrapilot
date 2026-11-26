@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "CommonJS",
+    "moduleResolution": "Node",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "resolveJsonModule": true,
+    "types": ["node"],
+    "baseUrl": ".",
+    "paths": {
+      "@infrapilot/server-core": ["../../src"],
+      "@/validators/*": ["../../src/validators/*"],
+      "@/*": ["../../src/*"]
+    }
+  },
+  "include": ["src/**/*.ts", "../../src/**/*.ts"]
+}
