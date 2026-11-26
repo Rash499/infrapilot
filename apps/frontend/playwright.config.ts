@@ -3,7 +3,7 @@ import { defineConfig, devices } from "@playwright/test";
 const baseURL = process.env.E2E_BASE_URL ?? "http://localhost:3000";
 
 export default defineConfig({
-  testDir: "./e2e",
+  testDir: "../../e2e",
   timeout: 45_000,
   expect: { timeout: 10_000 },
   fullyParallel: false,
@@ -17,10 +17,19 @@ export default defineConfig({
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   webServer: process.env.E2E_SKIP_SERVER
     ? undefined
-    : {
-        command: "npm run start",
-        url: `${baseURL}/api/health`,
-        reuseExistingServer: true,
-        timeout: 120_000,
-      },
+    : [
+        {
+          command: "npm run start -w apps/backend",
+          cwd: "../..",
+          url: "http://127.0.0.1:4000/api/health",
+          reuseExistingServer: !process.env.CI,
+          timeout: 120_000,
+        },
+        {
+          command: "npm run start",
+          url: `${baseURL}/api/health`,
+          reuseExistingServer: !process.env.CI,
+          timeout: 120_000,
+        },
+      ],
 });
