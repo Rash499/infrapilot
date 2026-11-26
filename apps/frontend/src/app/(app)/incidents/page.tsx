@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { Plus, Search, Siren } from "lucide-react";
 import { AssetPicker } from "@/components/forms/asset-picker";
-import { Button, Card, DataTable, EmptyState, ErrorState, Field, Input, Modal, PageHeader, Pagination, Select, StatCard, StatusBadge, TableSkeleton, Td, Textarea, Th } from "@/components/ui";
+import { Alert, Button, Card, DataTable, EmptyState, ErrorState, Field, Input, Modal, PageHeader, Pagination, Segmented, Select, StatCard, StatusBadge, TableSkeleton, Td, Textarea, Th, Toolbar } from "@/components/ui";
 import { useAuth } from "@/context/auth-context";
 import { useToast } from "@/context/toast-context";
 import { fetchData, fetchList, getErrorMessage, sendData, validatePayload } from "@/lib/client/api";
@@ -83,6 +83,7 @@ export default function IncidentsPage() {
   return (
     <div className="space-y-6">
       <PageHeader
+        eyebrow="Operations"
         title="Incidents"
         description="Track service disruptions from detection through root-cause analysis and resolution."
         actions={
@@ -104,8 +105,8 @@ export default function IncidentsPage() {
         />
       </div>
 
-      <Card className="p-4">
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+      <Toolbar>
+        <div className="grid w-full gap-3 md:grid-cols-2 xl:grid-cols-5">
           <div className="relative xl:col-span-2">
             <Search className="pointer-events-none absolute left-3 top-2.5 size-4 text-muted" aria-hidden="true" />
             <Input aria-label="Search incidents" className="pl-9" placeholder="Search by title" value={search} onChange={(e) => setSearch(e.target.value)} />
@@ -135,18 +136,17 @@ export default function IncidentsPage() {
             ))}
           </Select>
         </div>
-        <div className="mt-3 flex flex-wrap gap-2">
-          {[
-            ["", "All"],
-            ["true", "Active"],
-            ["false", "Closed"],
-          ].map(([value, label]) => (
-            <Button key={label} size="sm" variant={active === value ? "primary" : "outline"} onClick={() => setActive(value)}>
-              {label}
-            </Button>
-          ))}
-        </div>
-      </Card>
+        <Segmented
+          label="Incident scope"
+          value={active}
+          onChange={setActive}
+          options={[
+            { value: "", label: "All" },
+            { value: "true", label: "Active" },
+            { value: "false", label: "Closed" },
+          ]}
+        />
+      </Toolbar>
 
       <Card className="overflow-hidden">
         {list.error && !list.data ? <ErrorState message={list.error} onRetry={list.reload} /> : null}
@@ -174,10 +174,10 @@ export default function IncidentsPage() {
               </thead>
               <tbody>
                 {list.data.items.map((i) => (
-                  <tr key={i.id} className="hover:bg-surface-2/50">
+                  <tr key={i.id} className="row-hover">
                     <Td className="whitespace-nowrap font-mono text-xs text-muted">{i.reference}</Td>
                     <Td>
-                      <Link href={`/incidents/${i.id}`} className="font-medium text-sky-500 hover:underline">
+                      <Link href={`/incidents/${i.id}`} className="font-medium text-accent hover:underline">
                         {i.title}
                       </Link>
                       <p className="text-xs text-muted">Updated {fmtRelative(i.updatedAt)}</p>
@@ -221,9 +221,7 @@ export default function IncidentsPage() {
       >
         <form id="incident-form" onSubmit={onCreate} className="grid gap-4 sm:grid-cols-2" noValidate>
           {formError ? (
-            <p role="alert" className="rounded-md border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-500 sm:col-span-2">
-              {formError}
-            </p>
+            <Alert tone="danger" className="sm:col-span-2">{formError}</Alert>
           ) : null}
           <Field label="Title *" htmlFor="i-title" error={errors.title?.message} className="sm:col-span-2">
             <Input id="i-title" {...register("title", { required: "Title is required" })} placeholder="Checkout API returning 503s" />

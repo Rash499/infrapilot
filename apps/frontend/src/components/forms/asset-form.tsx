@@ -5,7 +5,7 @@ import { useForm } from "react-hook-form";
 import { getErrorMessage, sendData, validatePayload } from "@/lib/client/api";
 import { ASSET_STATUS_OPTIONS, ASSET_TYPE_OPTIONS, ENVIRONMENT_OPTIONS } from "@/lib/format";
 import { useToast } from "@/context/toast-context";
-import { Button, Field, Input, Modal, Select, Textarea } from "@/components/ui";
+import { Alert, Button, Field, FormSection, Input, Modal, Select, Textarea } from "@/components/ui";
 import { assetCreateSchema } from "@/validators/schemas";
 import type { Asset, UserOption } from "@/types/api";
 
@@ -112,67 +112,72 @@ export function AssetFormModal({
         </>
       }
     >
-      <form id="asset-form" onSubmit={onSubmit} className="grid gap-4 sm:grid-cols-2" noValidate>
-        {errors.root?.message ? (
-          <p role="alert" className="rounded-md border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-500 sm:col-span-2">
-            {errors.root.message}
-          </p>
-        ) : null}
-        <Field label="Asset name *" htmlFor="asset-name" error={errors.name?.message} className="sm:col-span-2">
-          <Input id="asset-name" {...register("name", { required: "Asset name is required" })} placeholder="e.g. prod-db-01" />
-        </Field>
-        <Field label="Asset type *" htmlFor="asset-type">
-          <Select id="asset-type" {...register("assetType")}>
-            {ASSET_TYPE_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </Select>
-        </Field>
-        <Field label="Environment *" htmlFor="asset-env">
-          <Select id="asset-env" {...register("environment")}>
-            {ENVIRONMENT_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </Select>
-        </Field>
-        <Field label="Hostname" htmlFor="asset-host">
-          <Input id="asset-host" {...register("hostname")} placeholder="server.internal.example" />
-        </Field>
-        <Field label="IP address" htmlFor="asset-ip">
-          <Input id="asset-ip" {...register("ipAddress")} placeholder="10.0.12.5" />
-        </Field>
-        <Field label="Operating system" htmlFor="asset-os">
-          <Input id="asset-os" {...register("operatingSystem")} placeholder="Ubuntu 24.04 LTS" />
-        </Field>
-        <Field label="Location" htmlFor="asset-loc">
-          <Input id="asset-loc" {...register("location")} placeholder="eu-west-1 / Rack B4" />
-        </Field>
-        <Field label="Owner" htmlFor="asset-owner">
-          <Select id="asset-owner" {...register("ownerId")}>
-            <option value="">Unassigned</option>
-            {owners.map((o) => (
-              <option key={o.id} value={o.id}>
-                {o.name}
-              </option>
-            ))}
-          </Select>
-        </Field>
-        <Field label="Status" htmlFor="asset-status" hint="Monitored assets are updated automatically from their monitoring checks.">
-          <Select id="asset-status" {...register("status")}>
-            {ASSET_STATUS_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </Select>
-        </Field>
-        <Field label="Description" htmlFor="asset-desc" className="sm:col-span-2">
-          <Textarea id="asset-desc" {...register("description")} rows={3} />
-        </Field>
+      <form id="asset-form" onSubmit={onSubmit} className="space-y-5" noValidate>
+        {errors.root?.message ? <Alert tone="danger">{errors.root.message}</Alert> : null}
+
+        <FormSection title="Identity">
+          <Field label="Asset name *" htmlFor="asset-name" error={errors.name?.message} className="sm:col-span-2">
+            <Input id="asset-name" {...register("name", { required: "Asset name is required" })} placeholder="e.g. prod-db-01" />
+          </Field>
+          <Field label="Asset type *" htmlFor="asset-type">
+            <Select id="asset-type" {...register("assetType")}>
+              {ASSET_TYPE_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field label="Environment *" htmlFor="asset-env">
+            <Select id="asset-env" {...register("environment")}>
+              {ENVIRONMENT_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </Select>
+          </Field>
+        </FormSection>
+
+        <FormSection title="Network and platform" description="Optional details used to identify the host in the inventory.">
+          <Field label="Hostname" htmlFor="asset-host">
+            <Input id="asset-host" {...register("hostname")} placeholder="server.internal.example" />
+          </Field>
+          <Field label="IP address" htmlFor="asset-ip">
+            <Input id="asset-ip" {...register("ipAddress")} placeholder="10.0.12.5" />
+          </Field>
+          <Field label="Operating system" htmlFor="asset-os">
+            <Input id="asset-os" {...register("operatingSystem")} placeholder="Ubuntu 24.04 LTS" />
+          </Field>
+          <Field label="Location" htmlFor="asset-loc">
+            <Input id="asset-loc" {...register("location")} placeholder="eu-west-1 / Rack B4" />
+          </Field>
+        </FormSection>
+
+        <FormSection title="Ownership and state">
+          <Field label="Owner" htmlFor="asset-owner">
+            <Select id="asset-owner" {...register("ownerId")}>
+              <option value="">Unassigned</option>
+              {owners.map((o) => (
+                <option key={o.id} value={o.id}>
+                  {o.name}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field label="Status" htmlFor="asset-status" hint="Monitored assets are updated automatically from their monitoring checks.">
+            <Select id="asset-status" {...register("status")}>
+              {ASSET_STATUS_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field label="Description" htmlFor="asset-desc" className="sm:col-span-2">
+            <Textarea id="asset-desc" {...register("description")} rows={3} />
+          </Field>
+        </FormSection>
       </form>
     </Modal>
   );

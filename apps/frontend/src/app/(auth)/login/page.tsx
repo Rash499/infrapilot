@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { useForm, type Resolver } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { LogIn } from "lucide-react";
 import { useAuth } from "@/context/auth-context";
 import { getErrorMessage } from "@/lib/client/api";
 import { Alert, Button, Card, Field, Input } from "@/components/ui";
@@ -40,28 +41,54 @@ export default function LoginPage() {
   });
 
   return (
-    <Card className="p-6">
-      <h1 className="text-lg font-semibold text-fg">Sign in</h1>
-      <p className="mt-1 text-sm text-muted">Use your InfraPilot account to access the operations console.</p>
-      <form onSubmit={onSubmit} className="mt-6 space-y-4" noValidate>
+    <Card className="p-6 sm:p-7">
+      <div className="mb-6">
+        <p className="text-2xs font-semibold uppercase tracking-[0.1em] text-accent">Welcome back</p>
+        <h1 className="mt-1 text-xl font-semibold tracking-[-0.01em] text-fg">Sign in</h1>
+        <p className="mt-1.5 text-sm leading-relaxed text-muted">
+          Use your InfraPilot account to open the operations console.
+        </p>
+      </div>
+
+      <form onSubmit={onSubmit} className="space-y-4" noValidate>
         {serverError ? <Alert tone="danger">{serverError}</Alert> : null}
-        <Field label="Email" htmlFor="login-email" error={errors.email?.message}>
-          <Input id="login-email" type="email" autoComplete="email" {...register("email")} />
+        <Field label="Email" htmlFor="login-email" error={errors.email?.message} required>
+          <Input
+            id="login-email"
+            type="email"
+            autoComplete="email"
+            autoFocus
+            placeholder="you@company.com"
+            aria-invalid={errors.email ? true : undefined}
+            {...register("email")}
+          />
         </Field>
-        <Field label="Password" htmlFor="login-password" error={errors.password?.message}>
-          <Input id="login-password" type="password" autoComplete="current-password" {...register("password")} />
+        <Field label="Password" htmlFor="login-password" error={errors.password?.message} required>
+          <Input
+            id="login-password"
+            type="password"
+            autoComplete="current-password"
+            placeholder="••••••••••••"
+            aria-invalid={errors.password ? true : undefined}
+            {...register("password")}
+          />
         </Field>
-        <Button type="submit" className="w-full" loading={isSubmitting}>
+
+        <Button type="submit" className="mt-1 w-full" loading={isSubmitting}>
+          {isSubmitting ? null : <LogIn className="size-4" aria-hidden="true" />}
           Sign in
         </Button>
       </form>
-      <div className="mt-5 flex flex-col gap-2 text-center text-sm text-muted sm:flex-row sm:justify-between">
-        <Link href="/forgot-password" className="text-sky-500 hover:underline">
-          Forgot password?
-        </Link>
-        <Link href="/register" className="text-sky-500 hover:underline">
-          Create an account
-        </Link>
+
+      <div className="mt-6 space-y-3 border-t border-line pt-4 text-sm">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <Link href="/forgot-password" className="rounded text-accent hover:underline">
+            Forgot password?
+          </Link>
+          <Link href="/register" className="rounded text-muted transition-colors hover:text-fg">
+            Create an account
+          </Link>
+        </div>
       </div>
     </Card>
   );

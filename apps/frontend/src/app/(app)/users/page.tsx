@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { ShieldCheck, Users as UsersIcon } from "lucide-react";
-import { Badge, Button, Card, ConfirmDialog, DataTable, EmptyState, ErrorState, Input, Modal, PageHeader, Pagination, Select, Skeleton, StatusBadge, TableSkeleton, Td, Th, cn } from "@/components/ui";
+import { Badge, Button, Card, CardHeader, ConfirmDialog, DataTable, EmptyState, ErrorState, Input, Modal, PageHeader, Pagination, Select, Skeleton, StatusBadge, TableSkeleton, Td, Th, Toolbar, cn } from "@/components/ui";
 import { useAuth } from "@/context/auth-context";
 import { useToast } from "@/context/toast-context";
 import { fetchData, fetchList, getErrorMessage, sendData } from "@/lib/client/api";
@@ -63,7 +63,7 @@ function UsersTab() {
 
   return (
     <div className="space-y-4">
-      <Card className="p-4">
+      <Toolbar>
         <div className="grid gap-3 md:grid-cols-3">
           <Input aria-label="Search users" placeholder="Search by name or email" value={search} onChange={(e) => setSearch(e.target.value)} className="md:col-span-2" />
           <Select aria-label="Filter by role" value={role} onChange={(e) => setRole(e.target.value)}>
@@ -75,7 +75,7 @@ function UsersTab() {
             ))}
           </Select>
         </div>
-      </Card>
+      </Toolbar>
       <Card className="overflow-hidden">
         {list.error && !list.data ? <ErrorState message={list.error} onRetry={list.reload} /> : null}
         {!list.data && list.loading ? <TableSkeleton rows={5} /> : null}
@@ -97,7 +97,7 @@ function UsersTab() {
                 {list.data.items.map((u) => {
                   const isSelf = u.id === me?.id;
                   return (
-                    <tr key={u.id} className="hover:bg-surface-2/50">
+                    <tr key={u.id} className="row-hover">
                       <Td className="font-medium">
                         {u.name} {isSelf ? <Badge tone="info">You</Badge> : null}
                       </Td>
@@ -316,7 +316,7 @@ function AuditTab() {
 
   return (
     <div className="space-y-4">
-      <Card className="p-4">
+      <Toolbar>
         <div className="grid gap-3 md:grid-cols-3">
           <Input aria-label="Search audit log" placeholder="Search summary, action, or entity ID" value={search} onChange={(e) => setSearch(e.target.value)} />
           <Select aria-label="Filter audit by entity" value={entityType} onChange={(e) => setEntityType(e.target.value)}>
@@ -334,7 +334,7 @@ function AuditTab() {
             ))}
           </Select>
         </div>
-      </Card>
+      </Toolbar>
       <Card className="overflow-hidden">
         {list.error && !list.data ? <ErrorState message={list.error} onRetry={list.reload} /> : null}
         {!list.data && list.loading ? <TableSkeleton rows={6} /> : null}
@@ -353,7 +353,7 @@ function AuditTab() {
               </thead>
               <tbody>
                 {list.data.items.map((a) => (
-                  <tr key={a.id}>
+                  <tr key={a.id} className="row-hover">
                     <Td className="whitespace-nowrap text-xs text-muted" title={fmtDateTime(a.createdAt)}>
                       {fmtRelative(a.createdAt)}
                     </Td>
@@ -381,36 +381,61 @@ export default function UsersPage() {
 
   if (user && user.role !== "admin") {
     return (
-      <EmptyState
-        icon={ShieldCheck}
-        title="Administrator access required"
-        description="User management and the audit trail are restricted to administrators."
-      />
+      <div className="space-y-6">
+        <PageHeader eyebrow="Administration" title="Users and access" />
+        <Card>
+          <EmptyState
+            icon={ShieldCheck}
+            title="Administrator access required"
+            description="User management and the audit trail are restricted to administrators. Ask an administrator for a role change."
+          />
+        </Card>
+      </div>
     );
   }
 
   return (
     <div className="space-y-6">
-      <PageHeader title="User management" description="Manage roles and account access, and review the audit trail." />
-      <div className="flex gap-2 border-b border-line">
+      <PageHeader
+        eyebrow="Administration"
+        title="Users and access"
+        description="Manage roles and account state, then review the immutable audit trail."
+      />
+      <div role="tablist" aria-label="User management views" className="flex gap-1 border-b border-line">
         {(["users", "audit"] as Tab[]).map((t) => (
           <button
             key={t}
+            id={`tab-${t}`}
             type="button"
+            role="tab"
+            aria-selected={tab === t}
+            aria-controls={`panel-${t}`}
+            tabIndex={tab === t ? 0 : -1}
             onClick={() => setTab(t)}
-            aria-pressed={tab === t}
-            className={cn("-mb-px border-b-2 px-3 pb-2 text-sm font-medium", tab === t ? "border-sky-500 text-sky-500" : "border-transparent text-muted hover:text-fg")}
+            onKeyDown={(event) => {
+              if (event.key === "ArrowRight" || event.key === "ArrowLeft") {
+                event.preventDefault();
+                setTab(t === "users" ? "audit" : "users");
+              }
+            }}
+            className={cn(
+              "-mb-px border-b-2 px-3 pb-2 text-sm font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent",
+              tab === t ? "border-accent text-accent" : "border-transparent text-muted hover:text-fg",
+            )}
           >
             {t === "users" ? "Users & roles" : "Audit log"}
           </button>
         ))}
       </div>
-      {tab === "users" ? <UsersTab /> : <AuditTab />}
+      <div role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`}>
+        {tab === "users" ? <UsersTab /> : <AuditTab />}
+      </div>
       <Card className="overflow-hidden">
-        <div className="border-b border-line px-4 py-3">
-          <h2 className="text-sm font-semibold text-fg">Role permission matrix</h2>
-          <p className="mt-1 text-xs text-muted">Minimum API access enforced by the server. Individual operations may apply additional checks.</p>
-        </div>
+        <CardHeader
+          title="Role permission matrix"
+          description="Minimum API access enforced by the server. Individual operations may apply additional checks."
+          icon={ShieldCheck}
+        />
         <div className="overflow-x-auto">
           <table className="w-full min-w-[560px] text-left text-sm" aria-label="Role permission matrix">
             <thead className="bg-surface-2 text-xs uppercase tracking-wide text-muted">
@@ -430,7 +455,7 @@ export default function UsersPage() {
                     return (
                       <td
                         key={role.value}
-                        className={`px-4 py-3 text-center ${granted ? "font-medium text-emerald-500" : "text-muted"}`}
+                        className={cn("px-4 py-3 text-center", granted ? "font-medium text-[var(--st-success-fg)]" : "text-muted")}
                         aria-label={`${role.label} ${level}: ${granted ? "granted" : "not granted"}`}
                       >
                         {granted ? "Granted" : "—"}

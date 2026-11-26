@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { GitPullRequest, Pencil, Plus, Search } from "lucide-react";
 import { AssetPicker } from "@/components/forms/asset-picker";
-import { Alert, Badge, Button, Card, DataTable, EmptyState, ErrorState, Field, Input, Modal, PageHeader, Pagination, Select, StatusBadge, TableSkeleton, Td, Textarea, Th, type Tone } from "@/components/ui";
+import { Alert, Badge, Button, Card, DataTable, EmptyState, ErrorState, Field, Input, Modal, PageHeader, Pagination, Select, StatusBadge, TableSkeleton, Td, Textarea, Th, Toolbar, type Tone } from "@/components/ui";
 import { useAuth } from "@/context/auth-context";
 import { useToast } from "@/context/toast-context";
 import { fetchData, fetchList, getErrorMessage, sendData, validatePayload } from "@/lib/client/api";
@@ -112,9 +112,7 @@ function ChangeFormModal({
     >
       <form id="change-form" onSubmit={onSubmit} className="grid gap-4 sm:grid-cols-2" noValidate>
         {formError ? (
-          <p role="alert" className="rounded-md border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-500 sm:col-span-2">
-            {formError}
-          </p>
+          <Alert tone="danger" className="sm:col-span-2">{formError}</Alert>
         ) : null}
         <Field label="Title *" htmlFor="c-title" error={errors.title?.message} className="sm:col-span-2">
           <Input id="c-title" {...register("title", { required: "Title is required" })} placeholder="Upgrade load balancer TLS policy" />
@@ -378,6 +376,7 @@ export default function ChangesPage() {
   return (
     <div className="space-y-6">
       <PageHeader
+        eyebrow="Operations"
         title="Change management"
         description="Request, assess, approve, implement and roll back infrastructure changes with a full audit trail."
         actions={
@@ -394,8 +393,8 @@ export default function ChangesPage() {
         }
       />
 
-      <Card className="p-4">
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+      <Toolbar>
+        <div className="grid w-full gap-3 md:grid-cols-2 xl:grid-cols-4">
           <div className="relative xl:col-span-2">
             <Search className="pointer-events-none absolute left-3 top-2.5 size-4 text-muted" aria-hidden="true" />
             <Input aria-label="Search changes" className="pl-9" placeholder="Search by title" value={search} onChange={(e) => setSearch(e.target.value)} />
@@ -417,7 +416,7 @@ export default function ChangesPage() {
             ))}
           </Select>
         </div>
-      </Card>
+      </Toolbar>
 
       <Card className="overflow-hidden">
         {list.error && !list.data ? <ErrorState message={list.error} onRetry={reload} /> : null}
@@ -445,10 +444,10 @@ export default function ChangesPage() {
               </thead>
               <tbody>
                 {list.data.items.map((c) => (
-                  <tr key={c.id} className="cursor-pointer hover:bg-surface-2/50" onClick={() => setDetailId(c.id)}>
+                  <tr key={c.id} className="cursor-pointer row-hover" onClick={() => setDetailId(c.id)}>
                     <Td className="whitespace-nowrap font-mono text-xs text-muted">{c.reference}</Td>
                     <Td>
-                      <button type="button" onClick={(e) => { e.stopPropagation(); setDetailId(c.id); }} className="text-left font-medium text-sky-500 hover:underline">
+                      <button type="button" onClick={(e) => { e.stopPropagation(); setDetailId(c.id); }} className="text-left font-medium text-accent hover:underline">
                         {c.title}
                       </button>
                     </Td>

@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { Pencil, Plus, Search, ShieldAlert, Trash2 } from "lucide-react";
 import { DistributionChart } from "@/components/charts";
-import { Badge, Button, Card, ConfirmDialog, DataTable, EmptyState, ErrorState, Field, Input, Modal, PageHeader, Pagination, Select, StatCard, StatusBadge, TableSkeleton, Td, Textarea, Th } from "@/components/ui";
+import { Alert, Badge, Button, Card, CardHeader, ConfirmDialog, DataTable, EmptyState, ErrorState, Field, Input, Modal, PageHeader, Pagination, Select, StatCard, StatusBadge, TableSkeleton, Td, Textarea, Th, Toolbar } from "@/components/ui";
 import { useAuth } from "@/context/auth-context";
 import { useToast } from "@/context/toast-context";
 import { fetchData, fetchList, getErrorMessage, sendData, validatePayload } from "@/lib/client/api";
@@ -96,9 +96,7 @@ function FindingFormModal({
     >
       <form id="finding-form" onSubmit={onSubmit} className="grid gap-4 sm:grid-cols-2" noValidate>
         {errors.root?.message ? (
-          <p role="alert" className="rounded-md border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-500 sm:col-span-2">
-            {errors.root.message}
-          </p>
+          <Alert tone="danger" className="sm:col-span-2">{errors.root.message}</Alert>
         ) : null}
         <Field label="Title *" htmlFor="f-title" className="sm:col-span-2">
           <Input id="f-title" {...register("title", { required: "Title is required" })} placeholder="Outdated TLS configuration on load balancer" />
@@ -282,7 +280,7 @@ function FindingDetailModal({
             <ol className="space-y-3 border-l border-line pl-4">
               {(f.history ?? []).map((h) => (
                 <li key={h.id} className="relative">
-                  <span className="absolute -left-[21px] top-1.5 size-2 rounded-full bg-sky-500" aria-hidden="true" />
+                  <span className="absolute -left-[21px] top-1.5 size-2 rounded-full bg-accent" aria-hidden="true" />
                   <p className="text-sm text-fg">
                     {h.fromStatus && h.toStatus ? (
                       <>
@@ -368,6 +366,7 @@ export default function SecurityPage() {
   return (
     <div className="space-y-6">
       <PageHeader
+        eyebrow="Security"
         title="Security findings"
         description="Centralised vulnerability and risk register. Scanner integrations can post findings here in a later release."
         actions={
@@ -385,14 +384,26 @@ export default function SecurityPage() {
       />
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <StatCard label="Critical (page)" value={countBy("severity", "critical")} icon={ShieldAlert} tone="danger" />
-        <StatCard label="High (page)" value={countBy("severity", "high")} icon={ShieldAlert} tone="warning" />
-        <StatCard label="Open (page)" value={countBy("status", "open")} hint="Newest 100 findings" />
-        <StatCard label="Accepted risk (page)" value={countBy("status", "accepted_risk")} />
+        <StatCard
+          label="Critical"
+          value={countBy("severity", "critical")}
+          hint="Loaded findings"
+          icon={ShieldAlert}
+          tone={countBy("severity", "critical") > 0 ? "danger" : "neutral"}
+        />
+        <StatCard
+          label="High"
+          value={countBy("severity", "high")}
+          hint="Loaded findings"
+          icon={ShieldAlert}
+          tone={countBy("severity", "high") > 0 ? "warning" : "neutral"}
+        />
+        <StatCard label="Open" value={countBy("status", "open")} hint="Awaiting triage" icon={ShieldAlert} />
+        <StatCard label="Accepted risk" value={countBy("status", "accepted_risk")} hint="Documented exceptions" />
       </div>
 
-      <Card className="p-4">
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+      <Toolbar>
+        <div className="grid w-full gap-3 md:grid-cols-2 xl:grid-cols-5">
           <div className="relative xl:col-span-2">
             <Search className="pointer-events-none absolute left-3 top-2.5 size-4 text-muted" aria-hidden="true" />
             <Input aria-label="Search findings" className="pl-9" placeholder="Search title or CVE" value={search} onChange={(e) => setSearch(e.target.value)} />
@@ -430,7 +441,7 @@ export default function SecurityPage() {
             ))}
           </Select>
         </div>
-      </Card>
+      </Toolbar>
 
       <div className="grid gap-4 xl:grid-cols-3">
         <Card className="overflow-hidden xl:col-span-2">
@@ -455,9 +466,9 @@ export default function SecurityPage() {
                 </thead>
                 <tbody>
                   {list.data.items.map((f) => (
-                    <tr key={f.id} className="hover:bg-surface-2/50">
+                    <tr key={f.id} className="row-hover">
                       <Td>
-                        <button type="button" onClick={() => setDetailId(f.id)} className="text-left font-medium text-sky-500 hover:underline">
+                        <button type="button" onClick={() => setDetailId(f.id)} className="text-left font-medium text-accent hover:underline">
                           {f.title}
                         </button>
                         {f.cveId ? <p className="text-xs text-muted">{f.cveId}</p> : null}
@@ -501,14 +512,38 @@ export default function SecurityPage() {
             </>
           ) : null}
         </Card>
-        <Card className="p-4">
-          <h2 className="mb-3 text-sm font-semibold text-fg">Findings by status</h2>
-          <DistributionChart
-            data={FINDING_STATUS_OPTIONS.map((o) => ({ label: o.label, count: countBy("status", o.value) }))}
-            color="#fbbf24"
-            height={220}
-          />
-        </Card>
+        <div className="space-y-4">
+          <Card>
+            <CardHeader
+              title="Findings by status"
+              description="Newest 100 findings in the current filter"
+              icon={ShieldAlert}
+            />
+            <div className="p-3 pt-4">
+              <DistributionChart
+                data={FINDING_STATUS_OPTIONS.map((o) => ({ label: o.label, count: countBy("status", o.value) }))}
+                color="#f59e0b"
+                height={190}
+                labelWidth={104}
+              />
+            </div>
+          </Card>
+          <Card>
+            <CardHeader title="Findings by severity" description="Newest 100 findings in the current filter" icon={ShieldAlert} />
+            <div className="p-3 pt-4">
+              <DistributionChart
+                data={SEVERITY_OPTIONS.map((o) => ({ label: o.label, count: countBy("severity", o.value) }))}
+                color="#fb7185"
+                height={214}
+                labelWidth={104}
+              />
+            </div>
+          </Card>
+          <Alert tone="info">
+            Counts on this page describe the newest 100 findings matching the current filters. Use the filters to narrow
+            the register.
+          </Alert>
+        </div>
       </div>
 
       <FindingFormModal

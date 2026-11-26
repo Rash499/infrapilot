@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { CalendarClock, Pencil, Plus, Search, Trash2 } from "lucide-react";
 import { AssetPicker } from "@/components/forms/asset-picker";
-import { Button, Card, ConfirmDialog, DataTable, EmptyState, ErrorState, Field, Input, Modal, PageHeader, Pagination, Select, StatusBadge, TableSkeleton, Td, Textarea, Th } from "@/components/ui";
+import { Alert, Button, Card, ConfirmDialog, DataTable, EmptyState, ErrorState, Field, Input, Modal, PageHeader, Pagination, Select, StatusBadge, TableSkeleton, Td, Textarea, Th, Toolbar } from "@/components/ui";
 import { useAuth } from "@/context/auth-context";
 import { useToast } from "@/context/toast-context";
 import { fetchData, fetchList, getErrorMessage, sendData, validatePayload } from "@/lib/client/api";
@@ -139,6 +139,7 @@ export default function MaintenancePage() {
   return (
     <div className="space-y-6">
       <PageHeader
+        eyebrow="Operations"
         title="Maintenance"
         description="Plan maintenance windows, the assets they touch, and the people responsible."
         actions={
@@ -150,8 +151,8 @@ export default function MaintenancePage() {
         }
       />
 
-      <Card className="p-4">
-        <div className="grid gap-3 md:grid-cols-3">
+      <Toolbar>
+        <div className="grid w-full gap-3 md:grid-cols-3">
           <div className="relative md:col-span-2">
             <Search className="pointer-events-none absolute left-3 top-2.5 size-4 text-muted" aria-hidden="true" />
             <Input aria-label="Search maintenance" className="pl-9" placeholder="Search by title" value={search} onChange={(e) => setSearch(e.target.value)} />
@@ -165,7 +166,7 @@ export default function MaintenancePage() {
             ))}
           </Select>
         </div>
-      </Card>
+      </Toolbar>
 
       <Card className="overflow-hidden">
         {list.error && !list.data ? <ErrorState message={list.error} onRetry={list.reload} /> : null}
@@ -193,7 +194,7 @@ export default function MaintenancePage() {
               </thead>
               <tbody>
                 {list.data.items.map((m) => (
-                  <tr key={m.id} className="hover:bg-surface-2/50">
+                  <tr key={m.id} className="row-hover">
                     <Td>
                       <p className="font-medium text-fg">{m.title}</p>
                       <p className="line-clamp-1 max-w-sm text-xs text-muted">{m.description}</p>
@@ -254,9 +255,7 @@ export default function MaintenancePage() {
       >
         <form id="maintenance-form" onSubmit={onSubmit} className="grid gap-4 sm:grid-cols-2" noValidate>
           {formError ? (
-            <p role="alert" className="rounded-md border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-500 sm:col-span-2">
-              {formError}
-            </p>
+            <Alert tone="danger" className="sm:col-span-2">{formError}</Alert>
           ) : null}
           <Field label="Title *" htmlFor="mt-title" error={errors.title?.message} className="sm:col-span-2">
             <Input id="mt-title" {...register("title", { required: "Title is required" })} placeholder="Database minor version upgrade" />

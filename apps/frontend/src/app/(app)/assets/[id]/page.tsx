@@ -3,9 +3,9 @@
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useState } from "react";
-import { ArrowLeft, Archive, ArchiveRestore, Pencil } from "lucide-react";
+import { Activity, Archive, ArchiveRestore, ArrowLeft, Pencil, ShieldAlert, Siren } from "lucide-react";
 import { AssetFormModal } from "@/components/forms/asset-form";
-import { Button, Card, ConfirmDialog, EmptyState, ErrorState, PageHeader, Skeleton, StatusBadge } from "@/components/ui";
+import { ActivityTimeline, Button, Card, CardHeader, ConfirmDialog, DetailItem, DetailList, EmptyState, ErrorState, PageHeader, Skeleton, StatusBadge } from "@/components/ui";
 import { useAuth } from "@/context/auth-context";
 import { useToast } from "@/context/toast-context";
 import { fetchData, getErrorMessage, sendData } from "@/lib/client/api";
@@ -55,7 +55,10 @@ export default function AssetDetailPage() {
 
   return (
     <div className="space-y-6">
-      <Link href="/assets" className="inline-flex items-center gap-1 text-sm text-muted hover:text-fg">
+      <Link
+        href="/assets"
+        className="inline-flex items-center gap-1 rounded text-sm text-muted transition-colors hover:text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+      >
         <ArrowLeft className="size-4" aria-hidden="true" /> Back to assets
       </Link>
 
@@ -67,6 +70,7 @@ export default function AssetDetailPage() {
       ) : (
         <>
           <PageHeader
+            eyebrow="Asset"
             title={a.name}
             description={`${humanize(a.assetType)} · ${humanize(a.environment)}${a.archivedAt ? " · Archived" : ""}`}
             actions={
@@ -87,38 +91,41 @@ export default function AssetDetailPage() {
           />
 
           <div className="grid gap-4 lg:grid-cols-3">
-            <Card className="p-5 lg:col-span-2">
-              <h2 className="mb-4 text-sm font-semibold text-fg">Details</h2>
-              <dl className="grid gap-x-6 gap-y-4 sm:grid-cols-2">
-                {[
-                  ["Status", <StatusBadge key="s" value={a.status} />],
-                  ["Environment", <StatusBadge key="e" value={a.environment} />],
-                  ["Hostname", a.hostname ?? "—"],
-                  ["IP address", a.ipAddress ?? "—"],
-                  ["Operating system", a.operatingSystem ?? "—"],
-                  ["Location", a.location ?? "—"],
-                  ["Owner", a.ownerName ?? "Unassigned"],
-                  ["Created", fmtDateTime(a.createdAt)],
-                  ["Last updated", `${fmtDateTime(a.updatedAt)} (${fmtRelative(a.updatedAt)})`],
-                ].map(([label, value]) => (
-                  <div key={String(label)}>
-                    <dt className="text-xs font-medium uppercase tracking-wide text-muted">{label}</dt>
-                    <dd className="mt-1 text-sm text-fg">{value}</dd>
-                  </div>
-                ))}
-              </dl>
-              <div className="mt-5">
-                <dt className="text-xs font-medium uppercase tracking-wide text-muted">Description</dt>
-                <dd className="mt-1 whitespace-pre-line text-sm text-fg">{a.description || "No description provided."}</dd>
+            <Card className="lg:col-span-2">
+              <CardHeader title="Asset details" description={`Registered ${fmtRelative(a.createdAt)}`} icon={Activity} />
+              <div className="p-4 pt-4">
+                <DetailList>
+                  <DetailItem label="Status">
+                    <StatusBadge value={a.status} />
+                  </DetailItem>
+                  <DetailItem label="Environment">
+                    <StatusBadge value={a.environment} />
+                  </DetailItem>
+                  <DetailItem label="Hostname">{a.hostname ?? "—"}</DetailItem>
+                  <DetailItem label="IP address">{a.ipAddress ?? "—"}</DetailItem>
+                  <DetailItem label="Operating system">{a.operatingSystem ?? "—"}</DetailItem>
+                  <DetailItem label="Location">{a.location ?? "—"}</DetailItem>
+                  <DetailItem label="Owner">{a.ownerName ?? "Unassigned"}</DetailItem>
+                  <DetailItem label="Asset type">{humanize(a.assetType)}</DetailItem>
+                  <DetailItem label="Created">{fmtDateTime(a.createdAt)}</DetailItem>
+                  <DetailItem label="Last updated">
+                    {fmtDateTime(a.updatedAt)} <span className="text-muted">({fmtRelative(a.updatedAt)})</span>
+                  </DetailItem>
+                  <DetailItem label="Description" className="sm:col-span-2">
+                    <span className="whitespace-pre-line">{a.description || "No description provided."}</span>
+                  </DetailItem>
+                </DetailList>
               </div>
             </Card>
 
-            <Card className="p-5">
-              <h2 className="mb-4 text-sm font-semibold text-fg">Monitoring</h2>
+            <Card className="p-4">
+              <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-fg">
+                <Activity className="size-4 text-accent" aria-hidden="true" /> Monitoring
+              </h2>
               {a.monitors.length === 0 ? (
                 <p className="text-sm text-muted">
                   No monitoring target is linked. Registering an asset does not mean it is monitored: add a check on the{" "}
-                  <Link href="/monitoring" className="text-sky-500 hover:underline">
+                  <Link href="/monitoring" className="text-accent hover:underline">
                     Monitoring
                   </Link>{" "}
                   page.
@@ -127,7 +134,7 @@ export default function AssetDetailPage() {
                 <ul className="space-y-2">
                   {a.monitors.map((m) => (
                     <li key={m.id} className="flex items-center justify-between gap-2">
-                      <Link href={`/monitoring?target=${m.id}`} className="truncate text-sm text-sky-500 hover:underline">
+                      <Link href={`/monitoring?target=${m.id}`} className="truncate text-sm text-accent hover:underline">
                         {m.name}
                       </Link>
                       <StatusBadge value={m.status} />
@@ -140,9 +147,7 @@ export default function AssetDetailPage() {
 
           <div className="grid gap-4 lg:grid-cols-2">
             <Card>
-              <div className="border-b border-line px-4 py-3">
-                <h2 className="text-sm font-semibold text-fg">Security findings</h2>
-              </div>
+              <CardHeader title="Security findings" description="Open and resolved vulnerabilities on this asset" icon={ShieldAlert} />
               {a.findings.length === 0 ? (
                 <EmptyState title="No findings for this asset" />
               ) : (
@@ -162,9 +167,7 @@ export default function AssetDetailPage() {
               )}
             </Card>
             <Card>
-              <div className="border-b border-line px-4 py-3">
-                <h2 className="text-sm font-semibold text-fg">Linked incidents</h2>
-              </div>
+              <CardHeader title="Linked incidents" description="Incidents that reference this asset" icon={Siren} />
               {a.incidents.length === 0 ? (
                 <EmptyState title="No incidents linked" />
               ) : (
@@ -183,22 +186,20 @@ export default function AssetDetailPage() {
           </div>
 
           <Card>
-            <div className="border-b border-line px-4 py-3">
-              <h2 className="text-sm font-semibold text-fg">Asset history</h2>
-            </div>
+            <CardHeader title="Asset history" description="Audit trail of changes to this record" icon={Activity} />
             {history.error ? <ErrorState message={history.error} /> : null}
             {history.data && history.data.length === 0 ? <EmptyState title="No history recorded yet" /> : null}
-            <ol className="relative space-y-4 px-6 py-5">
-              {(history.data ?? []).map((h) => (
-                <li key={h.id} className="relative pl-5">
-                  <span className="absolute left-0 top-1.5 size-2 rounded-full bg-sky-500" aria-hidden="true" />
-                  <p className="text-sm text-fg">{h.summary}</p>
-                  <p className="text-xs text-muted">
-                    {h.actorName} · {fmtDateTime(h.createdAt)}
-                  </p>
-                </li>
-              ))}
-            </ol>
+            <div className="px-4 py-4">
+              <ActivityTimeline
+                items={(history.data ?? []).map((h) => ({
+                  id: h.id,
+                  title: h.summary,
+                  meta: fmtRelative(h.createdAt),
+                  body: `${h.actorName} · ${fmtDateTime(h.createdAt)}`,
+                  tone: "info" as const,
+                }))}
+              />
+            </div>
           </Card>
         </>
       )}

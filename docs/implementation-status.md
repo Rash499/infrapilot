@@ -55,7 +55,7 @@ This is a repository inspection snapshot, not a claim that every listed capabili
 1. The repository is a Next.js 16 / React 19 frontend, standalone Express 5 backend, independent monitoring worker, and shared contracts/database/server-core packages. MongoDB is the only runtime data store; PostgreSQL/Drizzle is isolated to the optional one-time importer.
 2. `package-lock.json` is present and Docker/CI use `npm ci` for reproducible dependency installation.
 3. Root scripts cover workspace typechecks, frontend build, lint, unit tests, E2E, MongoDB bootstrap/seed/check, and safe importer dry-run/live commands.
-4. GitHub Actions starts an isolated MongoDB replica set and Playwright starts backend, worker, and frontend. A live run of this updated workflow is still needed to verify the migration against MongoDB.
+4. GitHub Actions starts an isolated MongoDB replica set and Playwright starts backend, worker, and frontend. Both CI jobs pass on this branch, including the five-test Playwright suite.
 5. External integrations (Prometheus, exporters, GitHub, Docker Engine, Kubernetes, Trivy, Greenbone, Restic, SMTP and Telegram) require their own installation, credentials and network policy. They must be shown as unconfigured until a successful connection test exists.
 
 ## Immediate next work
@@ -70,10 +70,10 @@ This is a repository inspection snapshot, not a claim that every listed capabili
 |---|---|---|
 | Workspace migration | Implemented | Frontend, backend, worker, contracts, database and server-core package manifests and TypeScript configs |
 | Architecture and deployment docs | Updated | `docs/architecture.md`, `docs/full-system-architecture.md`, `docs/deployment.md`, and migration status |
-| CI configuration | Updated; live workflow pending | `.github/workflows/ci.yml` provisions isolated MongoDB `rs0` for E2E |
-| Local lint | Passed | 0 errors; 19 existing frontend warnings |
+| CI configuration | Verified | `.github/workflows/ci.yml` provisions an isolated MongoDB `rs0`; both the quality job and the Playwright job pass on this branch |
+| Local lint | Passed | 0 errors; 20 existing frontend warnings (all `react-hooks/set-state-in-effect` advisories in auth/async-fetch effects) |
 | Workspace typecheck and production build | Passed | `npm run build` (typechecks every workspace, then builds frontend) |
-| Unit / component tests | Passed | `npm test`: 98 tests across 14 files |
-| Live MongoDB replica-set / Playwright E2E | Not run | No isolated MongoDB replica set or CI result verified in this environment |
+| Unit / component tests | Passed | `npm test`: 114 tests across 19 files |
+| Live MongoDB replica-set / Playwright E2E | Passed in CI | Playwright suite (5 tests) against a seeded `rs0` replica set in the PR workflow |
 | Importer snapshot validation | Not run | Requires a non-production PostgreSQL snapshot |
 | Production deployment | Not deployed | No deployment environment configured |

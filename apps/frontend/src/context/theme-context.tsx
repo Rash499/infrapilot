@@ -11,22 +11,32 @@ interface ThemeValue {
 }
 
 const ThemeContext = createContext<ThemeValue | null>(null);
-const STORAGE_KEY = "infrapilot-theme";
+export const THEME_STORAGE_KEY = "infrapilot-theme";
 
+/**
+ * Applies the theme choice to <html>. The initial value is written by the inline
+ * bootstrap script in the root layout before first paint, which is why this
+ * provider reads the resolved class instead of re-deriving the preference. That
+ * keeps the two in sync and avoids a flash of the wrong theme.
+ */
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [theme, setThemeState] = useState<Theme>("dark");
 
   useEffect(() => {
-    const saved = window.localStorage.getItem(STORAGE_KEY);
-    if (saved === "light" || saved === "dark") setThemeState(saved);
+    setThemeState(document.documentElement.classList.contains("dark") ? "dark" : "light");
   }, []);
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", theme === "dark");
+    document.documentElement.style.colorScheme = theme;
   }, [theme]);
 
   const setTheme = useCallback((next: Theme) => {
-    window.localStorage.setItem(STORAGE_KEY, next);
+    try {
+      window.localStorage.setItem(THEME_STORAGE_KEY, next);
+    } catch {
+      /* storage may be unavailable (private mode) — the theme still applies for this session */
+    }
     setThemeState(next);
   }, []);
 
