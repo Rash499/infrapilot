@@ -25,6 +25,11 @@
     "db:init:mongo": "tsx scripts/init-mongodb.ts",
     "db:bootstrap:mongo": "tsx scripts/bootstrap-mongodb.ts",
     "db:seed:mongo": "tsx scripts/seed-mongodb.ts",
+    "db:seed:demo": "tsx scripts/seed-demo.ts",
+    "db:seed:demo:dry-run": "tsx scripts/seed-demo.ts --dry-run",
+    "db:seed:demo:cleanup": "tsx scripts/seed-demo.ts --cleanup",
+    "db:verify:demo": "tsx scripts/verify-demo.ts",
+    "typecheck:demo": "tsc -p tsconfig.demo.json",
     "db:check:mongo": "tsx scripts/check-mongodb.ts",
     "db:migrate:mongo:dry-run": "tsx scripts/migrate-data.ts --dry-run",
     "db:migrate:mongo": "tsx scripts/migrate-data.ts"

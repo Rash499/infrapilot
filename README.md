@@ -48,6 +48,9 @@ npm run dev:worker
 npm run dev:frontend
 npm run db:init:mongo
 npm run db:seed:mongo
+npm run db:seed:demo      # presentation dataset; see docs/demo-environment.md
+npm run db:verify:demo
+npm run db:seed:demo:cleanup -- --yes
 ```
 
 Docker Compose remains optional. It can run MongoDB, backend, frontend, and worker:

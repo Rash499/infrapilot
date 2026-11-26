@@ -27,6 +27,8 @@ jobs:
         run: |
           npx next typegen apps/frontend
           npm run typecheck
+      - name: Demo tooling type check
+        run: npm run typecheck:demo
       - name: Unit and component tests
         run: npm test
       - name: Production build
@@ -43,6 +45,7 @@ jobs:
       SEED_PASSWORD: CiSeed-Password-2026
       E2E_ADMIN_EMAIL: admin@infrapilot.local
       E2E_ADMIN_PASSWORD: CiSeed-Password-2026
+      DEMO_SEED_PASSWORD: CiDemo-Password-2026
       EXPOSE_RESET_TOKEN: "true"
     steps:
       - uses: actions/checkout@v4
@@ -78,11 +81,40 @@ jobs:
           exit 1
       - run: npm run db:init:mongo
       - run: npm run db:seed:mongo
+      - name: Demo dataset validation (no database writes)
+        run: npm run db:seed:demo:dry-run
+      - name: Seed the demo environment twice to prove idempotency
+        run: |
+          npm run db:seed:demo
+          npm run db:seed:demo
+      - name: Verify the demo environment
+        run: npm run db:verify:demo
+      - name: Prove demo cleanup is scoped to seeded records
+        run: |
+          npm run db:seed:demo:cleanup -- --yes
+          npm run db:verify:demo -- --expect-empty
+      - name: Re-seed the demo data used by the browser suite
+        run: |
+          npm run db:seed:demo
+          npm run db:verify:demo
       - run: npm run build
       - run: npx playwright install --with-deps chromium
-      - run: npm run test:e2e
+      - name: End-to-end (Playwright)
+        run: |
+          set -o pipefail
+          npm run test:e2e -- --reporter=list,html 2>&1 | tee /tmp/playwright.txt
+      - name: Report end-to-end failures
+        if: failure()
+        run: |
+          if [ -f /tmp/playwright.json ]; then node scripts/report-e2e-failures.mjs /tmp/playwright.json; fi
+          sed -e 's/\x1b\[[0-9;]*m//g' -e 's/%/%25/g' -e 's/\r//g' /tmp/playwright.txt \
+            | awk '/^  [0-9]+\) /{flag=1} flag || /^Running [0-9]+ tests?/{print}' \
+            | head -45 \
+            | while IFS= read -r line; do echo "::error::${line:0:900}"; done
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
           name: playwright-report
-          path: playwright-report/
+          path: |
+            playwright-report/
+            test-results/
