@@ -807,16 +807,35 @@ async function seedAuditNarration(args: Args, registry: Registry, now: Date): Pr
 async function tagWorkflowArtifacts(registry: Registry): Promise<void> {
   const ids = registryIds(registry);
   if (ids.length === 0) return;
+  const marker = { $set: { demoBatch: DEMO_BATCH, demoSource: DEMO_SOURCE } };
+  const userIds = [...registry.users.values()];
+  const incidentIds = [...registry.incidents.values()];
+  const findingIds = [...registry.findings.values()];
+  const maintenanceIds = [...registry.maintenance.values()];
+  const changeIds = [...registry.changes.values()];
+  const targetIds = [...registry.monitors.values()];
+
+  // Rows the workflow wrote on behalf of demo parents (system comments, approvals, links) must be
+  // owned too, otherwise the cleanup guard rightly refuses to delete their parents.
+  const children: Array<[InfraPilotCollectionName, string, string[]]> = [
+    [collections.incidentComments, "incidentId", incidentIds],
+    [collections.incidentAssets, "incidentId", incidentIds],
+    [collections.findingEvents, "findingId", findingIds],
+    [collections.maintenanceAssets, "maintenanceId", maintenanceIds],
+    [collections.changeApprovals, "changeId", changeIds],
+    [collections.changeAssets, "changeId", changeIds],
+    [collections.monitoringResults, "targetId", targetIds],
+  ];
+  for (const [name, field, parentIds] of children) {
+    if (parentIds.length === 0) continue;
+    const col = await collection(name);
+    await col.updateMany(filter({ [field]: { $in: parentIds } }), marker);
+  }
+
   const audit = await collection(collections.auditLogs);
-  await audit.updateMany(
-    { $or: [{ entityId: { $in: ids } }, { actorId: { $in: [...registry.users.values()] } }] },
-    { $set: { demoBatch: DEMO_BATCH, demoSource: DEMO_SOURCE } },
-  );
+  await audit.updateMany(filter({ $or: [{ entityId: { $in: ids } }, { actorId: { $in: userIds } }] }), marker);
   const notifications = await collection(collections.notifications);
-  await notifications.updateMany(
-    { userId: { $in: [...registry.users.values()] } },
-    { $set: { demoBatch: DEMO_BATCH, demoSource: DEMO_SOURCE } },
-  );
+  await notifications.updateMany(filter({ userId: { $in: userIds } }), marker);
 }
 
 // ---------------------------------------------------------------------------------------------
