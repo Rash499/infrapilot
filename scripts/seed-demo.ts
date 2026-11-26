@@ -457,20 +457,29 @@ async function ensureIncidentState(spec: DemoIncidentSpec, id: string, registry:
  */
 async function syncIncidentComments(spec: DemoIncidentSpec, id: string, registry: Registry, now: Date): Promise<void> {
   const comments = await collection(collections.incidentComments);
-  const existing = await comments.find({ incidentId: id, demoBatch: DEMO_BATCH }).toArray();
   const wanted = spec.comments ?? [];
-  if (existing.length === wanted.length) return;
+  // Only the authored comments carry a demoKey; the workflow's system comments must survive.
+  const authored = await comments.find({ incidentId: id, demoKey: { $exists: true } }).toArray();
+  const currentBodies = authored.map((row) => String(row.body)).sort();
+  const wantedBodies = wanted.map((comment) => comment.body).sort();
+  if (currentBodies.length === wantedBodies.length && currentBodies.every((body, index) => body === wantedBodies[index])) {
+    return;
+  }
 
-  await comments.deleteMany({ incidentId: id, demoBatch: DEMO_BATCH });
-  for (const comment of wanted) {
-    const row = await addIncidentComment(actorFrom(comment.author, registry), id, comment.body, SEED_IP);
+  await comments.deleteMany({ incidentId: id, demoKey: { $exists: true } });
+  for (const [index, comment] of wanted.entries()) {
+    await addIncidentComment(actorFrom(comment.author, registry), id, comment.body, SEED_IP);
     const created = await comments.findOne({ incidentId: id, authorId: registry.users.get(comment.author), body: comment.body });
     if (created) {
       await comments.updateOne({ _id: created._id }, {
-        $set: { demoBatch: DEMO_BATCH, demoSource: DEMO_SOURCE, demoKey: `${spec.key}-comment-${wanted.indexOf(comment)}`, createdAt: at(now, comment.hoursAgo) },
+        $set: {
+          demoBatch: DEMO_BATCH,
+          demoSource: DEMO_SOURCE,
+          demoKey: `${spec.key}-comment-${index}`,
+          createdAt: at(now, comment.hoursAgo),
+        },
       });
     }
-    void row;
   }
 }
 
