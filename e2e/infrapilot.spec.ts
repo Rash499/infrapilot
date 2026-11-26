@@ -26,6 +26,7 @@ test.describe("InfraPilot end-to-end", () => {
   test("shows account sign-in history to administrators", async ({ page }) => {
     await signIn(page);
     await page.goto("/users");
+    await page.getByLabel("Search users").fill(email);
     const accountRow = page.getByRole("row").filter({ hasText: email });
     await accountRow.getByRole("button", { name: /View sign-in history/ }).click();
     await expect(page.getByRole("dialog")).toContainText("Successful sign-in");

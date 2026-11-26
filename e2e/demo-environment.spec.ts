@@ -26,9 +26,9 @@ test.describe("demo environment", () => {
     await signIn(page, adminEmail);
 
     // KPI labels are present and non-zero (the exact totals depend on how much was seeded).
-    await expect(page.getByText("Registered assets")).toBeVisible();
-    await expect(page.getByText("Open incidents")).toBeVisible();
-    await expect(page.getByText("Critical & high findings")).toBeVisible();
+    await expect(page.getByText("Registered assets").first()).toBeVisible();
+    await expect(page.getByText("Open incidents").first()).toBeVisible();
+    await expect(page.getByText("Critical & high findings").first()).toBeVisible();
 
     // The attention list is fed by the seeded monitor states.
     await expect(page.getByText("prd-db-02 replica PostgreSQL (TCP)")).toBeVisible();
@@ -47,9 +47,9 @@ test.describe("demo environment", () => {
     await page.getByRole("link", { name: "prd-db-01", exact: true }).click();
 
     await expect(page.getByRole("heading", { name: "prd-db-01" })).toBeVisible();
-    await expect(page.getByText("10.20.10.31")).toBeVisible();
-    await expect(page.getByText("Asset details")).toBeVisible();
-    await expect(page.getByText("prd-db-01 PostgreSQL (TCP)")).toBeVisible();
+    await expect(page.getByText("10.20.10.31").first()).toBeVisible();
+    await expect(page.getByText("Asset details").first()).toBeVisible();
+    await expect(page.getByText("prd-db-01 PostgreSQL (TCP)").first()).toBeVisible();
   });
 
   test("monitoring page shows healthy, unavailable and paused services", async ({ page }) => {
