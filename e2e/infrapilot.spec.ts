@@ -27,7 +27,8 @@ test.describe("InfraPilot end-to-end", () => {
     await signIn(page);
     await page.goto("/users");
     await page.getByLabel("Search users").fill(email);
-    const accountRow = page.getByRole("row").filter({ hasText: email });
+    // Exact cell match: "admin@infrapilot.local" is a substring of "demo.admin@infrapilot.local".
+    const accountRow = page.getByRole("row").filter({ has: page.getByRole("cell", { name: email, exact: true }) });
     await accountRow.getByRole("button", { name: /View sign-in history/ }).click();
     await expect(page.getByRole("dialog")).toContainText("Successful sign-in");
   });
