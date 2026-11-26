@@ -100,18 +100,17 @@ jobs:
       - run: npm run build
       - run: npx playwright install --with-deps chromium
       - name: End-to-end (Playwright)
-        env:
-          PLAYWRIGHT_JSON_OUTPUT_NAME: /tmp/playwright.json
         run: |
           set -o pipefail
-          npm run test:e2e -- --reporter=list,json,html 2>&1 | tee /tmp/playwright.txt
+          npm run test:e2e -- --reporter=list,html 2>&1 | tee /tmp/playwright.txt
       - name: Report end-to-end failures
         if: failure()
         run: |
-          node scripts/report-e2e-failures.mjs /tmp/playwright.json
-          echo "::group::Playwright output tail"
-          tail -25 /tmp/playwright.txt
-          echo "::endgroup::"
+          if [ -f /tmp/playwright.json ]; then node scripts/report-e2e-failures.mjs /tmp/playwright.json; fi
+          sed -e 's/\x1b\[[0-9;]*m//g' -e 's/%/%25/g' -e 's/\r//g' /tmp/playwright.txt \
+            | awk '/^  [0-9]+\) /{flag=1} flag || /^Running [0-9]+ tests?/{print}' \
+            | head -45 \
+            | while IFS= read -r line; do echo "::error::${line:0:900}"; done
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
