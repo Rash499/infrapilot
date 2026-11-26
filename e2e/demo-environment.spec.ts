@@ -72,9 +72,10 @@ test.describe("demo environment", () => {
     await page.getByRole("link", { name: /Nightly backup job failed/ }).click();
 
     await expect(page.getByText("Resolved").first()).toBeVisible();
-    await expect(page.getByText("Resolution").first()).toBeVisible();
+    // Administrators get the management form, so the documented resolution is a field value.
+    await expect(page.getByLabel(/Root cause/)).toHaveValue(/Backup repository service was stopped/);
+    await expect(page.getByLabel(/Resolution summary/)).toHaveValue(/Restarted the Veeam Backup Service/);
     await expect(page.getByText(/Recovery point created/)).toBeVisible();
-    await expect(page.getByText(/Backup repository service was stopped/)).toBeVisible();
   });
 
   test("findings are labelled as demonstration data", async ({ page }) => {
