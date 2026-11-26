@@ -130,6 +130,7 @@ test.describe("demo environment", () => {
   test("the read-only demo account sees no write actions", async ({ page }) => {
     await signIn(page, viewerEmail);
     await page.goto("/assets");
+    await page.getByLabel("Search assets").fill("prd-web-01");
     await expect(page.getByRole("link", { name: "prd-web-01", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Register asset" })).toHaveCount(0);
 
