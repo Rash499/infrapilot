@@ -62,9 +62,12 @@ services:
     depends_on:
       mongo-init:
         condition: service_completed_successfully
+      backend:
+        condition: service_healthy
     environment:
       <<: *app-env
       INFRAPILOT_EMBEDDED_WORKER: "false"
+      BACKEND_API_URL: http://backend:4000
     ports:
       - "${APP_PORT:-3000}:3000"
     healthcheck:
@@ -74,12 +77,33 @@ services:
       start_period: 60s
       retries: 3
 
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command: ["npm", "run", "start", "-w", "apps/backend"]
+    depends_on:
+      mongo-init:
+        condition: service_completed_successfully
+    environment:
+      <<: *app-env
+      PORT: 4000
+    ports:
+      - "${BACKEND_PORT:-4000}:4000"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:4000/api/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
   worker:
     build:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
-    command: ["npx", "tsx", "src/workers/run.ts"]
+    command: ["npm", "run", "start", "-w", "apps/worker"]
     depends_on:
       app:
         condition: service_healthy
