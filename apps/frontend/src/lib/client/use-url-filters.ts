@@ -1,5 +1,6 @@
 "use client";
 
+import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef } from "react";
 
 /**
@@ -15,6 +16,8 @@ export function useUrlFilters<T extends Record<string, string>>(
   defaults: T,
   apply: (patch: Partial<T>) => void,
 ): void {
+  const pathname = usePathname();
+  const router = useRouter();
   const applyRef = useRef(apply);
   const defaultsRef = useRef(defaults);
   const serialized = JSON.stringify(values);
@@ -50,9 +53,14 @@ export function useUrlFilters<T extends Record<string, string>>(
       if (!value || value === fallback) params.delete(key);
       else params.set(key, value);
     }
+    // A client-side navigation away from this page must not be overwritten by a late filter write:
+    // the rendered pathname and the browser pathname disagree for the duration of the transition.
+    if (window.location.pathname !== pathname) return;
     const query = params.toString();
-    const next = `${window.location.pathname}${query ? `?${query}` : ""}`;
+    const next = `${pathname}${query ? `?${query}` : ""}`;
     const now = `${window.location.pathname}${window.location.search}`;
-    if (next !== now) window.history.replaceState(null, "", next);
-  }, [serialized]);
+    // Go through the router so Next's navigation state stays consistent; a raw replaceState is
+    // invisible to it and the next link click can be dropped.
+    if (next !== now) router.replace(next, { scroll: false });
+  }, [serialized, pathname, router]);
 }

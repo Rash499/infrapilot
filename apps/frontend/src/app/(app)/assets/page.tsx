@@ -57,12 +57,13 @@ export default function AssetsPage() {
     setPage(1);
   }, [debounced, assetType, environment, status, archived, sort, order]);
 
-  // The filtered view is shareable: reloading or navigating back restores the same filters.
+  // Structured filters are shareable: reloading or navigating back restores the same view. The
+  // free-text search is intentionally transient — writing it from a debounce would race with a row
+  // click that navigates to an asset while the timer fires.
   useUrlFilters(
-    { q: debounced, type: assetType, env: environment, state: status, scope: archived, sort, order },
-    { q: "", type: "", env: "", state: "", scope: "false", sort: "name", order: "asc" },
+    { type: assetType, env: environment, state: status, scope: archived, sort, order },
+    { type: "", env: "", state: "", scope: "false", sort: "name", order: "asc" },
     (patch) => {
-      if (patch.q !== undefined) setSearch(patch.q);
       if (patch.type !== undefined) setAssetType(patch.type);
       if (patch.env !== undefined) setEnvironment(patch.env);
       if (patch.state !== undefined) setStatus(patch.state);
