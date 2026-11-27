@@ -384,10 +384,12 @@ export function PasswordInput({ className, ...props }: InputHTMLAttributes<HTMLI
       <button
         type="button"
         onClick={() => setVisible((value) => !value)}
-        aria-label={visible ? "Hide password" : "Show password"}
+        // The name deliberately avoids the word "password": page-level "Password" labels must stay
+        // uniquely identifiable for assistive tech and for label-based automation.
+        aria-label={visible ? "Hide characters" : "Show characters"}
         aria-pressed={visible}
         aria-controls={props.id ?? ctx?.controlId}
-        title={visible ? "Hide password" : "Show password"}
+        title={visible ? "Hide characters" : "Show characters"}
         className="absolute right-1 top-1/2 grid size-7 -translate-y-1/2 place-items-center rounded text-muted transition-colors hover:bg-surface-2 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-ring"
       >
         {visible ? <EyeOff className="size-4" aria-hidden="true" /> : <Eye className="size-4" aria-hidden="true" />}

@@ -113,15 +113,30 @@ describe("PasswordInput", () => {
     const input = screen.getByLabelText("New password");
     expect(input).toHaveAttribute("type", "password");
 
-    const toggle = screen.getByRole("button", { name: "Show password" });
+    const toggle = screen.getByRole("button", { name: "Show characters" });
     expect(toggle).toHaveAttribute("aria-pressed", "false");
 
     await user.click(toggle);
     expect(input).toHaveAttribute("type", "text");
     expect(input).toHaveValue("Correct-Horse-9");
 
-    await user.click(screen.getByRole("button", { name: "Hide password" }));
+    await user.click(screen.getByRole("button", { name: "Hide characters" }));
     expect(input).toHaveAttribute("type", "password");
+  });
+});
+
+describe("Password field labelling", () => {
+  it("stays unique so label-based queries cannot hit the visibility toggle", () => {
+    render(
+      <Field label="Password" htmlFor="pw" required>
+        <PasswordInput id="pw" />
+      </Field>,
+    );
+
+    // Regression guard: the toggle must not carry a name containing "password", otherwise
+    // `getByLabel("Password")` becomes ambiguous in Playwright strict mode.
+    expect(screen.getAllByLabelText(/password/i)).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Show characters" })).toBeInTheDocument();
   });
 });
 
