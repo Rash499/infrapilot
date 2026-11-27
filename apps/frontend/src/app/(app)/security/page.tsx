@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
-import { Pencil, Plus, Search, ShieldAlert, Trash2 } from "lucide-react";
+import { Pencil, Plus, Search, ShieldAlert, Trash2, Upload } from "lucide-react";
 import { DistributionChart } from "@/components/charts";
 import { Alert, Badge, Button, Card, CardHeader, ConfirmDialog, DataTable, EmptyState, ErrorState, Field, Input, Modal, PageHeader, Pagination, Select, StatCard, StatusBadge, TableSkeleton, Td, Textarea, Th, Toolbar } from "@/components/ui";
 import { useAuth } from "@/context/auth-context";
@@ -11,7 +11,7 @@ import { fetchData, fetchList, getErrorMessage, sendData, validatePayload } from
 import { useAsync } from "@/lib/client/use-async";
 import { FINDING_STATUS_OPTIONS, SEVERITY_OPTIONS, fmtDateTime, fmtRelative, humanize } from "@/lib/format";
 import { findingCreateSchema, findingUpdateSchema } from "@/validators/schemas";
-import type { Asset, Finding, UserOption } from "@/types/api";
+import type { Asset, Finding, SecurityDashboard, TrivyImportResult, UserOption } from "@/types/api";
 
 interface FindingFormValues {
   title: string;
@@ -174,6 +174,118 @@ function blank(f: Finding | null): FindingFormValues {
   };
 }
 
+function TrivyImportModal({
+  open,
+  onClose,
+  onImported,
+  assets,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onImported: () => void;
+  assets: Asset[];
+}) {
+  const toast = useToast();
+  const [assetId, setAssetId] = useState("");
+  const [fileName, setFileName] = useState("");
+  const [result, setResult] = useState<TrivyImportResult | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!open) {
+      setAssetId("");
+      setFileName("");
+      setResult(null);
+    }
+  }, [open]);
+
+  const onFile = async (file: File | undefined) => {
+    if (!file) return;
+    if (!assetId) {
+      toast.error("Select the asset this report describes first");
+      return;
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      toast.error("Trivy reports must be 2 MB or smaller");
+      return;
+    }
+    setBusy(true);
+    setResult(null);
+    try {
+      const text = await file.text();
+      let report: unknown;
+      try {
+        report = JSON.parse(text);
+      } catch {
+        throw new Error("The selected file is not valid JSON");
+      }
+      const imported = await sendData<TrivyImportResult>("post", "/security/imports", { assetId, report });
+      setFileName(file.name);
+      setResult(imported);
+      toast.success(`${imported.findingsCreated} new findings imported`);
+      onImported();
+    } catch (err) {
+      toast.error(getErrorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="Import Trivy report"
+      description="Upload a Trivy JSON report produced elsewhere (trivy image --format json). InfraPilot parses it; it never executes the file or runs a live scan."
+    >
+      <div className="space-y-4">
+        <Field label="Asset *" htmlFor="trivy-asset" hint="Findings are attached to this asset and deduplicated by CVE + package">
+          <Select id="trivy-asset" value={assetId} onChange={(e) => setAssetId(e.target.value)} disabled={!!result}>
+            <option value="">Select an asset</option>
+            {assets.map((asset) => (
+              <option key={asset.id} value={asset.id}>
+                {asset.name}
+              </option>
+            ))}
+          </Select>
+        </Field>
+        <Field label="Report file (.json)" htmlFor="trivy-file" hint="Maximum 2 MB and 1,000 vulnerabilities per import">
+          <input
+            id="trivy-file"
+            type="file"
+            accept="application/json,.json"
+            disabled={busy || !assetId || !!result}
+            onChange={(e) => void onFile(e.target.files?.[0])}
+            className="block w-full cursor-pointer rounded-md border border-line bg-surface px-3 py-2 text-sm text-fg file:mr-3 file:rounded file:border-0 file:bg-accent-soft file:px-3 file:py-1 file:text-xs file:font-medium file:text-accent"
+          />
+        </Field>
+        {busy ? <p className="text-xs text-muted">Parsing and importing…</p> : null}
+        {result ? (
+          <div className="space-y-2 rounded-lg border border-line bg-surface-2/50 p-3 text-xs">
+            <p className="text-sm font-medium text-fg">{fileName}</p>
+            <p className="text-muted">
+              {result.artifactName} · {result.vulnerabilitiesSeen} vulnerabilities seen · scanned {result.scannedAt ? fmtDateTime(result.scannedAt) : "date not reported"}
+            </p>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+              <div><span className="block text-muted">Created</span><span className="font-semibold text-fg">{result.findingsCreated}</span></div>
+              <div><span className="block text-muted">Refreshed</span><span className="font-semibold text-fg">{result.findingsUpdated}</span></div>
+              <div><span className="block text-muted">Reopened</span><span className="font-semibold text-fg">{result.findingsReopened}</span></div>
+              <div><span className="block text-muted">Skipped</span><span className="font-semibold text-fg">{result.findingsSkipped}</span></div>
+            </div>
+            <p className="text-muted">
+              {result.criticalCount} critical and {result.highCount} high severity. Remediation deadlines follow policy: critical 7 days, high 30 days.
+            </p>
+            {result.skipped.length > 0 ? (
+              <p className="text-muted">Skipped entries: {result.skipped.map((row) => `${row.id} (${row.reason})`).join(", ")}</p>
+            ) : null}
+            <p className="text-muted">Imported findings reflect the report&apos;s scan, not a live scan performed by InfraPilot.</p>
+          </div>
+        ) : null}
+      </div>
+    </Modal>
+  );
+}
+
 function FindingDetailModal({
   id,
   onClose,
@@ -249,6 +361,22 @@ function FindingDetailModal({
               <dt className="text-xs uppercase tracking-wide text-muted">Responsible user</dt>
               <dd className="text-sm text-fg">{f.assigneeName ?? "Unassigned"}</dd>
             </div>
+            <div>
+              <dt className="text-xs uppercase tracking-wide text-muted">Component</dt>
+              <dd className="text-sm text-fg">
+                {f.component ? `${f.component}${f.installedVersion ? ` ${f.installedVersion}` : ""}${f.fixedVersion ? ` → ${f.fixedVersion}` : ""}` : "—"}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs uppercase tracking-wide text-muted">CVSS / source</dt>
+              <dd className="text-sm text-fg">
+                {f.cvssScore !== null ? f.cvssScore.toFixed(1) : "—"} · {f.source === "trivy" ? "Trivy import" : "Manual"}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs uppercase tracking-wide text-muted">Remediation deadline</dt>
+              <dd className="text-sm text-fg">{f.remediationDeadline ? fmtDateTime(f.remediationDeadline) : "—"}</dd>
+            </div>
           </dl>
           <div>
             <h3 className="text-xs uppercase tracking-wide text-muted">Description</h3>
@@ -316,6 +444,7 @@ export default function SecurityPage() {
   const [editing, setEditing] = useState<Finding | null>(null);
   const [detailId, setDetailId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Finding | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -339,10 +468,12 @@ export default function SecurityPage() {
   const stats = useAsync(() => fetchList<Finding>("/findings", { pageSize: 100 }), []);
   const assets = useAsync(() => fetchList<Asset>("/assets", { pageSize: 100 }), []);
   const users = useAsync(() => fetchData<UserOption[]>("/users/options"), []);
+  const dashboard = useAsync(() => fetchData<SecurityDashboard>("/security/dashboard"), []);
 
   const reloadAll = () => {
     list.reload();
     stats.reload();
+    dashboard.reload();
   };
 
   const countBy = (key: "severity" | "status", value: string) =>
@@ -368,17 +499,22 @@ export default function SecurityPage() {
       <PageHeader
         eyebrow="Security"
         title="Security findings"
-        description="Centralised vulnerability and risk register. Scanner integrations can post findings here in a later release."
+        description="Vulnerability and risk register. Import Trivy JSON reports or record findings manually; remediation deadlines follow the documented severity policy."
         actions={
           can("write") ? (
-            <Button
-              onClick={() => {
-                setEditing(null);
-                setFormOpen(true);
-              }}
-            >
-              <Plus className="size-4" aria-hidden="true" /> Record finding
-            </Button>
+            <>
+              <Button variant="outline" onClick={() => setImportOpen(true)}>
+                <Upload className="size-4" aria-hidden="true" /> Import Trivy report
+              </Button>
+              <Button
+                onClick={() => {
+                  setEditing(null);
+                  setFormOpen(true);
+                }}
+              >
+                <Plus className="size-4" aria-hidden="true" /> Record finding
+              </Button>
+            </>
           ) : null
         }
       />
@@ -399,7 +535,12 @@ export default function SecurityPage() {
           tone={countBy("severity", "high") > 0 ? "warning" : "neutral"}
         />
         <StatCard label="Open" value={countBy("status", "open")} hint="Awaiting triage" icon={ShieldAlert} />
-        <StatCard label="Accepted risk" value={countBy("status", "accepted_risk")} hint="Documented exceptions" />
+        <StatCard
+          label="Past deadline"
+          value={dashboard.data?.overdue ?? 0}
+          hint={`${dashboard.data?.dueSoon ?? 0} due within 7 days`}
+          tone={(dashboard.data?.overdue ?? 0) > 0 ? "danger" : "neutral"}
+        />
       </div>
 
       <Toolbar>
@@ -554,6 +695,8 @@ export default function SecurityPage() {
         onClose={() => setFormOpen(false)}
         onSaved={() => reloadAll()}
       />
+      <TrivyImportModal open={importOpen} onClose={() => setImportOpen(false)} onImported={reloadAll} assets={assets.data?.items ?? []} />
+
       <FindingDetailModal
         id={detailId}
         onClose={() => setDetailId(null)}

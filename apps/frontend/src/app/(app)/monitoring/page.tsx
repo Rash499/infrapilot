@@ -10,7 +10,7 @@ import { fetchData, fetchList, getErrorMessage, sendData, validatePayload } from
 import { useAsync } from "@/lib/client/use-async";
 import { fmtMs, fmtPct, fmtRelative, humanize } from "@/lib/format";
 import { monitorCreateSchema } from "@/validators/schemas";
-import type { Asset, MonitorOverview, MonitorResult, MonitorTarget, TargetDetail } from "@/types/api";
+import type { Asset, MonitoringAnalytics, MonitorOverview, MonitorResult, MonitorTarget, TargetDetail } from "@/types/api";
 import { useForm } from "react-hook-form";
 
 interface MonitorFormValues {
@@ -23,6 +23,11 @@ interface MonitorFormValues {
   intervalSeconds: string;
   timeoutMs: string;
   degradedThresholdMs: string;
+  warningThresholdMs: string;
+  criticalThresholdMs: string;
+  failureThreshold: string;
+  recoveryThreshold: string;
+  autoIncidentEnabled: boolean;
   enabled: boolean;
   allowPrivateNetwork: boolean;
   assetId: string;
@@ -39,6 +44,11 @@ function toValues(t?: MonitorTarget | null): MonitorFormValues {
     intervalSeconds: String(t?.intervalSeconds ?? 60),
     timeoutMs: String(t?.timeoutMs ?? 5000),
     degradedThresholdMs: String(t?.degradedThresholdMs ?? 1000),
+    warningThresholdMs: String(t?.warningThresholdMs ?? t?.degradedThresholdMs ?? 1500),
+    criticalThresholdMs: String(t?.criticalThresholdMs ?? 5000),
+    failureThreshold: String(t?.failureThreshold ?? 3),
+    recoveryThreshold: String(t?.recoveryThreshold ?? 2),
+    autoIncidentEnabled: t?.autoIncidentEnabled ?? true,
     enabled: t?.enabled ?? true,
     allowPrivateNetwork: t?.allowPrivateNetwork ?? false,
     assetId: t?.assetId ?? "",
@@ -80,6 +90,11 @@ function MonitorFormModal({
       intervalSeconds: Number(v.intervalSeconds),
       timeoutMs: Number(v.timeoutMs),
       degradedThresholdMs: Number(v.degradedThresholdMs),
+      warningThresholdMs: Number(v.warningThresholdMs),
+      criticalThresholdMs: Number(v.criticalThresholdMs),
+      failureThreshold: Number(v.failureThreshold),
+      recoveryThreshold: Number(v.recoveryThreshold),
+      autoIncidentEnabled: v.autoIncidentEnabled,
       enabled: v.enabled,
       allowPrivateNetwork: v.allowPrivateNetwork,
       assetId: v.assetId || null,
@@ -166,8 +181,21 @@ function MonitorFormModal({
         <Field label="Degraded above (ms)" htmlFor="m-degraded" hint="Successful checks slower than this are Degraded">
           <Input id="m-degraded" type="number" min={50} max={60000} {...register("degradedThresholdMs")} />
         </Field>
+        <Field label="Warning alert above (ms)" htmlFor="m-warning" hint="Raises a warning alert; also used for the Degraded state">
+          <Input id="m-warning" type="number" min={50} max={120000} {...register("warningThresholdMs")} />
+        </Field>
+        <Field label="Critical latency above (ms)" htmlFor="m-critical" hint="Raises a critical alert and may open an incident">
+          <Input id="m-critical" type="number" min={50} max={300000} {...register("criticalThresholdMs")} />
+        </Field>
+        <Field label="Failures before unavailable" htmlFor="m-failures" hint="Consecutive failed checks (1 – 20)">
+          <Input id="m-failures" type="number" min={1} max={20} {...register("failureThreshold")} />
+        </Field>
+        <Field label="Successes before recovery" htmlFor="m-recovery" hint="Successful checks required to resolve availability alerts">
+          <Input id="m-recovery" type="number" min={1} max={20} {...register("recoveryThreshold")} />
+        </Field>
         <div className="flex flex-col justify-end gap-3">
           <Checkbox id="m-enabled" label="Enabled" {...register("enabled")} />
+          <Checkbox id="m-auto-incident" label="Create incidents automatically for critical alerts" {...register("autoIncidentEnabled")} />
           {isAdmin ? (
             <Checkbox id="m-private" label="Authorise private network targets (admin)" {...register("allowPrivateNetwork")} />
           ) : null}
@@ -298,12 +326,14 @@ export default function MonitoringPage() {
     () => fetchList<MonitorTarget>("/monitoring/targets", { page, pageSize: 15, search: debounced, state, monitorType, sort: "name", order: "asc" }),
     [page, debounced, state, monitorType],
   );
+  const analytics = useAsync(() => fetchData<MonitoringAnalytics>("/monitoring/analytics", { range: "24h" }), []);
   const assets = useAsync(() => fetchList<Asset>("/assets", { pageSize: 100 }), []);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
       overview.reload();
       list.reload();
+      analytics.reload();
     }, 30_000);
     return () => window.clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -373,10 +403,19 @@ export default function MonitoringPage() {
           <StatCard label="Healthy" value={s.healthy} tone="success" />
           <StatCard label="Degraded" value={s.degraded} tone={s.degraded > 0 ? "warning" : "neutral"} />
           <StatCard label="Unavailable" value={s.unavailable} tone={s.unavailable > 0 ? "danger" : "neutral"} />
-          <StatCard label="Uptime (24h)" value={fmtPct(overview.data?.uptime24hPct)} hint={`${overview.data?.checks24h ?? 0} checks`} />
-          <StatCard label="Avg response (24h)" value={fmtMs(overview.data?.avgResponse24hMs)} />
+          <StatCard
+            label="Uptime (24h)"
+            value={fmtPct(analytics.data?.uptime.h24 ?? overview.data?.uptime24hPct)}
+            hint={`${analytics.data?.totals.total ?? overview.data?.checks24h ?? 0} checks · 7d ${fmtPct(analytics.data?.uptime.d7)} · 30d ${fmtPct(analytics.data?.uptime.d30)}`}
+          />
+          <StatCard
+            label="Latency p95 (24h)"
+            value={fmtMs(analytics.data?.totals.p95Ms)}
+            hint={`p99 ${fmtMs(analytics.data?.totals.p99Ms)} · avg ${fmtMs(analytics.data?.totals.avgMs)}`}
+          />
         </div>
       ) : null}
+      {analytics.error ? <ErrorState message={analytics.error} onRetry={analytics.reload} /> : null}
 
       <Toolbar>
         <div className="grid w-full gap-3 md:grid-cols-3">
