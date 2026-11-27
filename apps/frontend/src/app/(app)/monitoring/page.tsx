@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Activity, Pencil, Play, Plus, Search, Trash2 } from "lucide-react";
 import { ResponseTrendChart, type TrendPoint } from "@/components/charts";
-import { Alert, Badge, Button, Card, CardHeader, Checkbox, ConfirmDialog, DataTable, EmptyState, ErrorState, Field, FormSection, Input, Modal, PageHeader, Pagination, Select, StatCard, StatusBadge, StatusDot, TableSkeleton, Td, Th, Toolbar } from "@/components/ui";
+import { Alert, Badge, Button, Card, CardHeader, ConfirmDialog, DataTable, EmptyState, ErrorState, Field, FormSection, Input, Modal, PageHeader, Pagination, Select, StatCard, StatusBadge, StatusDot, Switch, TableSkeleton, Td, Th, Toolbar } from "@/components/ui";
 import { useAuth } from "@/context/auth-context";
 import { useToast } from "@/context/toast-context";
-import { fetchData, fetchList, getErrorMessage, sendData, validatePayload } from "@/lib/client/api";
+import { fetchData, fetchList, getErrorMessage, sendData } from "@/lib/client/api";
+import { focusFirstInvalid, serverFieldErrors, validateFields } from "@/lib/client/form";
 import { useAsync } from "@/lib/client/use-async";
 import { fmtMs, fmtPct, fmtRelative, humanize } from "@/lib/format";
 import { monitorCreateSchema } from "@/validators/schemas";
@@ -55,6 +56,28 @@ function toValues(t?: MonitorTarget | null): MonitorFormValues {
   };
 }
 
+type MonitorField = keyof MonitorFormValues;
+
+const MONITOR_FIELDS: MonitorField[] = [
+  "name",
+  "monitorType",
+  "url",
+  "host",
+  "port",
+  "expectedStatusCode",
+  "intervalSeconds",
+  "timeoutMs",
+  "degradedThresholdMs",
+  "warningThresholdMs",
+  "criticalThresholdMs",
+  "failureThreshold",
+  "recoveryThreshold",
+  "autoIncidentEnabled",
+  "enabled",
+  "allowPrivateNetwork",
+  "assetId",
+];
+
 function MonitorFormModal({
   open,
   onClose,
@@ -71,22 +94,57 @@ function MonitorFormModal({
   isAdmin: boolean;
 }) {
   const toast = useToast();
-  const { register, handleSubmit, reset, watch, setError, formState: { errors, isSubmitting } } = useForm<MonitorFormValues>({
-    defaultValues: toValues(target),
-  });
+  const formRef = useRef<HTMLFormElement>(null);
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const {
+    register,
+    handleSubmit,
+    reset,
+    watch,
+    setError,
+    clearErrors,
+    formState: { errors, isSubmitting, isDirty },
+  } = useForm<MonitorFormValues>({ defaultValues: toValues(target) });
   useEffect(() => {
     if (open) reset(toValues(target));
   }, [open, target, reset]);
   const type = watch("monitorType");
 
+  const requestClose = () => {
+    if (isSubmitting) return;
+    if (isDirty) setConfirmDiscard(true);
+    else onClose();
+  };
+
+  // Non-blocking advisory: the API accepts these combinations, but an inverted ladder means the
+  // operator will not see the state they expect, so it is worth saying out loud.
+  const numbers = {
+    timeout: Number(watch("timeoutMs")),
+    degraded: Number(watch("degradedThresholdMs")),
+    warning: Number(watch("warningThresholdMs")),
+    critical: Number(watch("criticalThresholdMs")),
+    interval: Number(watch("intervalSeconds")),
+  };
+  const ladder = [numbers.degraded, numbers.warning, numbers.critical];
+  const advisory =
+    numbers.timeout > numbers.interval * 1000
+      ? "The timeout is longer than the check interval, so checks will overlap."
+      : ladder.some((value, index) => index > 0 && value < ladder[index - 1]!)
+        ? "Thresholds are not in ascending order (degraded → warning → critical)."
+        : null;
+
   const onSubmit = handleSubmit(async (v) => {
+    clearErrors("root");
+    const isHttp = v.monitorType === "http";
     const payload = {
       name: v.name.trim(),
       monitorType: v.monitorType,
-      url: v.monitorType === "http" ? v.url.trim() || undefined : undefined,
-      host: v.monitorType === "tcp" ? v.host.trim() || null : null,
-      port: v.monitorType === "tcp" && v.port ? Number(v.port) : null,
-      expectedStatusCode: v.expectedStatusCode ? Number(v.expectedStatusCode) : null,
+      // Conditional fields are dropped rather than submitted stale, so switching the check type
+      // never sends a TCP host alongside an HTTP target (or the reverse).
+      url: isHttp ? v.url.trim() || undefined : undefined,
+      host: isHttp ? null : v.host.trim() || null,
+      port: isHttp ? null : v.port ? Number(v.port) : null,
+      expectedStatusCode: isHttp && v.expectedStatusCode ? Number(v.expectedStatusCode) : null,
       intervalSeconds: Number(v.intervalSeconds),
       timeoutMs: Number(v.timeoutMs),
       degradedThresholdMs: Number(v.degradedThresholdMs),
@@ -99,110 +157,171 @@ function MonitorFormModal({
       allowPrivateNetwork: v.allowPrivateNetwork,
       assetId: v.assetId || null,
     };
+
+    const validation = validateFields(monitorCreateSchema, payload, setError, MONITOR_FIELDS);
+    if (!validation.valid) {
+      if (validation.formError) setError("root", { message: validation.formError });
+      requestAnimationFrame(() => focusFirstInvalid(formRef.current));
+      return;
+    }
+
     try {
-      validatePayload(monitorCreateSchema, payload);
       if (target) await sendData("patch", `/monitoring/targets/${target.id}`, payload);
       else await sendData("post", "/monitoring/targets", payload);
       toast.success(target ? "Monitoring target updated" : "Monitoring target created — first check is queued");
       onSaved();
+      reset(toValues(target));
       onClose();
     } catch (err) {
-      setError("root", { message: getErrorMessage(err) });
+      const mapped = serverFieldErrors(err, setError, MONITOR_FIELDS);
+      if (!mapped.firstField) setError("root", { message: getErrorMessage(err) });
+      requestAnimationFrame(() => focusFirstInvalid(formRef.current));
     }
   });
 
   return (
-    <Modal
-      open={open}
-      onClose={onClose}
-      size="lg"
-      title={target ? "Edit monitoring check" : "Add monitoring check"}
-      description="Checks run in the background worker. Private, loopback and metadata destinations are blocked unless an administrator authorises them."
-      footer={
-        <>
-          <Button variant="outline" onClick={onClose} disabled={isSubmitting}>
-            Cancel
-          </Button>
-          <Button type="submit" form="monitor-form" loading={isSubmitting}>
-            {target ? "Save check" : "Create check"}
-          </Button>
-        </>
-      }
-    >
-      <form id="monitor-form" onSubmit={onSubmit} className="space-y-5" noValidate>
-        {errors.root?.message ? <Alert tone="danger">{errors.root.message}</Alert> : null}
-        <FormSection title="Target">
-        <Field label="Name *" htmlFor="m-name" className="sm:col-span-2">
-          <Input id="m-name" {...register("name", { required: "Name is required" })} placeholder="Checkout API health" />
-        </Field>
-        <Field label="Check type *" htmlFor="m-type">
-          <Select id="m-type" {...register("monitorType")}>
-            <option value="http">HTTP / HTTPS endpoint</option>
-            <option value="tcp">TCP connectivity</option>
-          </Select>
-        </Field>
-        <Field label="Linked asset" htmlFor="m-asset" hint="Rolls check state up to the asset status.">
-          <Select id="m-asset" {...register("assetId")}>
-            <option value="">Not linked</option>
-            {assets.map((a) => (
-              <option key={a.id} value={a.id}>
-                {a.name}
-              </option>
-            ))}
-          </Select>
-        </Field>
-        {type === "http" ? (
+    <>
+      <Modal
+        open={open}
+        onClose={requestClose}
+        size="lg"
+        title={target ? "Edit monitoring check" : "Add monitoring check"}
+        description="Checks run in the background worker. Private, loopback and metadata destinations are blocked unless an administrator authorises them."
+        footer={
           <>
-            <Field label="URL *" htmlFor="m-url" className="sm:col-span-2" error={errors.url?.message} hint="Credentials in URLs are rejected. Redirects are not followed.">
-              <Input id="m-url" {...register("url")} placeholder="https://status.example.com/health" />
-            </Field>
-            <Field label="Expected status code" htmlFor="m-status" hint="Leave empty to accept any 2xx or 3xx.">
-              <Input id="m-status" type="number" min={100} max={599} {...register("expectedStatusCode")} />
-            </Field>
+            <Button variant="outline" onClick={requestClose} disabled={isSubmitting}>
+              Cancel
+            </Button>
+            <Button type="submit" form="monitor-form" loading={isSubmitting}>
+              {target ? "Save check" : "Create check"}
+            </Button>
           </>
-        ) : (
-          <>
-            <Field label="Host *" htmlFor="m-host">
-              <Input id="m-host" {...register("host")} placeholder="db.example.com" />
-            </Field>
-            <Field label="Port *" htmlFor="m-port">
-              <Input id="m-port" type="number" min={1} max={65535} {...register("port")} placeholder="5432" />
-            </Field>
-          </>
-        )}
-        </FormSection>
-        <FormSection title="Schedule and thresholds" description="Defaults apply when a value is left empty.">
-        <Field label="Interval (seconds)" htmlFor="m-interval" hint="30 – 86,400">
-          <Input id="m-interval" type="number" min={30} max={86400} {...register("intervalSeconds")} />
-        </Field>
-        <Field label="Timeout (ms)" htmlFor="m-timeout" hint="500 – 30,000">
-          <Input id="m-timeout" type="number" min={500} max={30000} {...register("timeoutMs")} />
-        </Field>
-        <Field label="Degraded above (ms)" htmlFor="m-degraded" hint="Successful checks slower than this are Degraded">
-          <Input id="m-degraded" type="number" min={50} max={60000} {...register("degradedThresholdMs")} />
-        </Field>
-        <Field label="Warning alert above (ms)" htmlFor="m-warning" hint="Raises a warning alert; also used for the Degraded state">
-          <Input id="m-warning" type="number" min={50} max={120000} {...register("warningThresholdMs")} />
-        </Field>
-        <Field label="Critical latency above (ms)" htmlFor="m-critical" hint="Raises a critical alert and may open an incident">
-          <Input id="m-critical" type="number" min={50} max={300000} {...register("criticalThresholdMs")} />
-        </Field>
-        <Field label="Failures before unavailable" htmlFor="m-failures" hint="Consecutive failed checks (1 – 20)">
-          <Input id="m-failures" type="number" min={1} max={20} {...register("failureThreshold")} />
-        </Field>
-        <Field label="Successes before recovery" htmlFor="m-recovery" hint="Successful checks required to resolve availability alerts">
-          <Input id="m-recovery" type="number" min={1} max={20} {...register("recoveryThreshold")} />
-        </Field>
-        <div className="flex flex-col justify-end gap-3">
-          <Checkbox id="m-enabled" label="Enabled" {...register("enabled")} />
-          <Checkbox id="m-auto-incident" label="Create incidents automatically for critical alerts" {...register("autoIncidentEnabled")} />
-          {isAdmin ? (
-            <Checkbox id="m-private" label="Authorise private network targets (admin)" {...register("allowPrivateNetwork")} />
+        }
+      >
+        <form ref={formRef} id="monitor-form" onSubmit={onSubmit} className="space-y-5" noValidate>
+          {errors.root?.message ? (
+            <Alert tone="danger" title="Could not save this check">
+              {errors.root.message}
+            </Alert>
           ) : null}
-        </div>
-        </FormSection>
-      </form>
-    </Modal>
+
+          <FormSection title="Target" description="What the worker probes and how it is identified.">
+            <Field label="Name" htmlFor="m-name" error={errors.name?.message} required className="sm:col-span-2">
+              <Input id="m-name" {...register("name")} maxLength={160} placeholder="Checkout API health" />
+            </Field>
+            <Field
+              label="Check type"
+              htmlFor="m-type"
+              error={errors.monitorType?.message}
+              hint="HTTP checks request a URL; TCP checks only open a socket."
+              required
+            >
+              <Select id="m-type" {...register("monitorType")}>
+                <option value="http">HTTP / HTTPS endpoint</option>
+                <option value="tcp">TCP connectivity</option>
+              </Select>
+            </Field>
+            <Field label="Linked asset" htmlFor="m-asset" error={errors.assetId?.message} hint="Rolls check state up to the asset status.">
+              <Select id="m-asset" {...register("assetId")}>
+                <option value="">Not linked</option>
+                {assets.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.name}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            {type === "http" ? (
+              <>
+                <Field
+                  label="URL"
+                  htmlFor="m-url"
+                  className="sm:col-span-2"
+                  error={errors.url?.message}
+                  hint="http or https. Credentials in the URL are rejected and redirects are not followed."
+                  required
+                >
+                  <Input id="m-url" type="url" inputMode="url" {...register("url")} placeholder="https://status.example.com/health" />
+                </Field>
+                <Field
+                  label="Expected status code"
+                  htmlFor="m-status"
+                  error={errors.expectedStatusCode?.message}
+                  hint="Leave empty to accept any 2xx or 3xx response."
+                >
+                  <Input id="m-status" type="number" inputMode="numeric" min={100} max={599} step={1} {...register("expectedStatusCode")} placeholder="200" />
+                </Field>
+              </>
+            ) : (
+              <>
+                <Field label="Host" htmlFor="m-host" error={errors.host?.message} hint="DNS name or IP address." required>
+                  <Input id="m-host" {...register("host")} maxLength={255} placeholder="db.example.com" />
+                </Field>
+                <Field label="Port" htmlFor="m-port" error={errors.port?.message} hint="1 – 65535." required>
+                  <Input id="m-port" type="number" inputMode="numeric" min={1} max={65535} step={1} {...register("port")} placeholder="5432" />
+                </Field>
+              </>
+            )}
+          </FormSection>
+
+          <FormSection title="Schedule and thresholds" description="Defaults apply when a value is left empty.">
+            <Field label="Interval (seconds)" htmlFor="m-interval" error={errors.intervalSeconds?.message} hint="How often the worker checks. 30 – 86,400.">
+              <Input id="m-interval" type="number" inputMode="numeric" min={30} max={86400} step={1} {...register("intervalSeconds")} />
+            </Field>
+            <Field label="Timeout (ms)" htmlFor="m-timeout" error={errors.timeoutMs?.message} hint="Give up after this long. 500 – 30,000.">
+              <Input id="m-timeout" type="number" inputMode="numeric" min={500} max={30000} step={100} {...register("timeoutMs")} />
+            </Field>
+            <Field label="Degraded above (ms)" htmlFor="m-degraded" error={errors.degradedThresholdMs?.message} hint="Successful checks slower than this are shown as Degraded.">
+              <Input id="m-degraded" type="number" inputMode="numeric" min={50} max={60000} step={100} {...register("degradedThresholdMs")} />
+            </Field>
+            <Field label="Warning alert above (ms)" htmlFor="m-warning" error={errors.warningThresholdMs?.message} hint="Latency that raises a warning alert.">
+              <Input id="m-warning" type="number" inputMode="numeric" min={50} max={120000} step={100} {...register("warningThresholdMs")} />
+            </Field>
+            <Field label="Critical latency above (ms)" htmlFor="m-critical" error={errors.criticalThresholdMs?.message} hint="Latency that raises a critical alert and may open an incident.">
+              <Input id="m-critical" type="number" inputMode="numeric" min={50} max={300000} step={100} {...register("criticalThresholdMs")} />
+            </Field>
+            <Field label="Failures before unavailable" htmlFor="m-failures" error={errors.failureThreshold?.message} hint="Consecutive failed checks. 1 – 20.">
+              <Input id="m-failures" type="number" inputMode="numeric" min={1} max={20} step={1} {...register("failureThreshold")} />
+            </Field>
+            <Field label="Successes before recovery" htmlFor="m-recovery" error={errors.recoveryThreshold?.message} hint="Successful checks needed to resolve availability alerts.">
+              <Input id="m-recovery" type="number" inputMode="numeric" min={1} max={20} step={1} {...register("recoveryThreshold")} />
+            </Field>
+            <div className="flex flex-col gap-3 sm:col-span-2">
+              <Switch id="m-enabled" label="Check enabled" description="Disabled checks stay configured but are not scheduled." {...register("enabled")} />
+              <Switch
+                id="m-auto-incident"
+                label="Open incidents automatically for critical alerts"
+                description="Critical alerts open one incident per asset, respecting maintenance windows."
+                {...register("autoIncidentEnabled")}
+              />
+              {isAdmin ? (
+                <Switch
+                  id="m-private"
+                  label="Authorise private network targets"
+                  description="Administrators only. Required for loopback, RFC1918 and link-local addresses."
+                  {...register("allowPrivateNetwork")}
+                />
+              ) : null}
+            </div>
+          </FormSection>
+
+          {advisory ? <Alert tone="warning" title="Check configuration">{advisory}</Alert> : null}
+        </form>
+      </Modal>
+
+      <ConfirmDialog
+        open={confirmDiscard}
+        title="Discard changes?"
+        description="This monitoring check has unsaved changes. Closing the dialog will discard them."
+        confirmLabel="Discard changes"
+        onCancel={() => setConfirmDiscard(false)}
+        onConfirm={() => {
+          setConfirmDiscard(false);
+          reset(toValues(target));
+          onClose();
+        }}
+      />
+    </>
   );
 }
 

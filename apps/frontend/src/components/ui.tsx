@@ -2,10 +2,13 @@
 
 import {
   Children,
+  createContext,
   forwardRef,
+  useContext,
   useEffect,
   useId,
   useRef,
+  useState,
   type ButtonHTMLAttributes,
   type InputHTMLAttributes,
   type ReactNode,
@@ -16,8 +19,13 @@ import {
 } from "react";
 import {
   AlertTriangle,
+  ArrowDown,
+  ArrowUp,
   ChevronLeft,
   ChevronRight,
+  ChevronsUpDown,
+  Eye,
+  EyeOff,
   Inbox,
   Loader2,
   Search,
@@ -277,31 +285,111 @@ const inputBase =
   "placeholder:text-faint hover:border-line-strong " +
   "focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent-ring/25 " +
   "disabled:cursor-not-allowed disabled:bg-surface-2 disabled:opacity-70 " +
-  "aria-[invalid=true]:border-rose-500 aria-[invalid=true]:focus:ring-rose-500/25";
+  "aria-[invalid=true]:border-rose-500 aria-[invalid=true]:ring-rose-500/25";
+
+/**
+ * Field context: lets a `Field` wrap any control and still get correct `id`, `aria-invalid`,
+ * `aria-describedby` wiring without every call site repeating the ids. Controls used outside a
+ * `Field` behave exactly as before.
+ */
+interface FieldContextValue {
+  controlId: string;
+  errorId?: string;
+  hintId?: string;
+  invalid: boolean;
+  required: boolean;
+}
+
+const FieldContext = createContext<FieldContextValue | null>(null);
+
+function useFieldContext(): FieldContextValue | null {
+  return useContext(FieldContext);
+}
+
+function mergeAria(
+  ctx: FieldContextValue | null,
+  describedBy: string | undefined,
+  invalid: InputHTMLAttributes<HTMLElement>["aria-invalid"],
+) {
+  if (!ctx) return { "aria-invalid": invalid, "aria-describedby": describedBy, "aria-required": undefined };
+  const ids = [describedBy, ctx.invalid ? ctx.errorId : ctx.hintId].filter(Boolean).join(" ");
+  return {
+    "aria-invalid": invalid ?? (ctx.invalid ? true : undefined),
+    "aria-describedby": ids || undefined,
+    "aria-required": ctx.required ? true : undefined,
+  };
+}
 
 export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement>>(function Input(
-  { className, ...props },
+  { className, id, "aria-describedby": describedBy, "aria-invalid": invalid, ...props },
   ref,
 ) {
-  return <input ref={ref} className={cn(inputBase, className)} {...props} />;
+  const ctx = useFieldContext();
+  return (
+    <input
+      ref={ref}
+      id={id ?? ctx?.controlId}
+      {...mergeAria(ctx, describedBy, invalid)}
+      className={cn(inputBase, className)}
+      {...props}
+    />
+  );
 });
 
 export const Select = forwardRef<HTMLSelectElement, SelectHTMLAttributes<HTMLSelectElement>>(function Select(
-  { className, children, ...props },
+  { className, children, id, "aria-describedby": describedBy, "aria-invalid": invalid, ...props },
   ref,
 ) {
+  const ctx = useFieldContext();
   return (
-    <select ref={ref} className={cn(inputBase, "cursor-pointer pr-8", className)} {...props}>
+    <select
+      ref={ref}
+      id={id ?? ctx?.controlId}
+      {...mergeAria(ctx, describedBy, invalid)}
+      className={cn(inputBase, "cursor-pointer pr-8", className)}
+      {...props}
+    >
       {children}
     </select>
   );
 });
 
 export const Textarea = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<HTMLTextAreaElement>>(
-  function Textarea({ className, ...props }, ref) {
-    return <textarea ref={ref} className={cn(inputBase, "h-auto min-h-24 py-2 leading-relaxed", className)} {...props} />;
+  function Textarea({ className, id, "aria-describedby": describedBy, "aria-invalid": invalid, ...props }, ref) {
+    const ctx = useFieldContext();
+    return (
+      <textarea
+        ref={ref}
+        id={id ?? ctx?.controlId}
+        {...mergeAria(ctx, describedBy, invalid)}
+        className={cn(inputBase, "h-auto min-h-24 py-2 leading-relaxed", className)}
+        {...props}
+      />
+    );
   },
 );
+
+/** Password input with an accessible show/hide toggle. */
+export function PasswordInput({ className, ...props }: InputHTMLAttributes<HTMLInputElement>) {
+  const [visible, setVisible] = useState(false);
+  const ctx = useFieldContext();
+  return (
+    <div className="relative">
+      <Input type={visible ? "text" : "password"} className={cn("pr-10", className)} {...props} />
+      <button
+        type="button"
+        onClick={() => setVisible((value) => !value)}
+        aria-label={visible ? "Hide password" : "Show password"}
+        aria-pressed={visible}
+        aria-controls={props.id ?? ctx?.controlId}
+        title={visible ? "Hide password" : "Show password"}
+        className="absolute right-1 top-1/2 grid size-7 -translate-y-1/2 place-items-center rounded text-muted transition-colors hover:bg-surface-2 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-ring"
+      >
+        {visible ? <EyeOff className="size-4" aria-hidden="true" /> : <Eye className="size-4" aria-hidden="true" />}
+      </button>
+    </div>
+  );
+}
 
 export function Field({
   label,
@@ -320,24 +408,80 @@ export function Field({
   children: ReactNode;
   className?: string;
 }) {
+  const autoId = useId();
+  const controlId = htmlFor ?? `field-${autoId}`;
+  const errorId = `${controlId}-error`;
+  const hintId = `${controlId}-hint`;
+  // Labels keep their historic "*" suffix (end-to-end and unit tests address fields by that name);
+  // `required` only adds the marker when the label does not already carry one.
+  const hasMarker = /\*\s*$/.test(label);
+  const isRequired = required ?? hasMarker;
+  const text = hasMarker ? label.replace(/\s*\*\s*$/, "") : label;
+  const context: FieldContextValue = {
+    controlId,
+    errorId,
+    hintId,
+    invalid: Boolean(error),
+    required: isRequired,
+  };
+
   return (
     <div className={cn("space-y-1.5", className)}>
-      <label htmlFor={htmlFor} className="flex items-center gap-1 text-xs font-medium text-fg-secondary">
-        {label}
-        {required ? (
-          <span className="text-rose-500" aria-hidden="true">
-            *
-          </span>
+      <label htmlFor={controlId} className="flex items-center gap-1 text-xs font-medium text-fg-secondary">
+        {text}
+        {isRequired ? (
+          <>
+            {" "}
+            <span className="text-rose-500">*</span>
+          </>
         ) : null}
       </label>
-      {children}
+      <FieldContext.Provider value={context}>{children}</FieldContext.Provider>
       {error ? (
-        <p role="alert" className="flex items-start gap-1 text-xs font-medium text-rose-500">
-          {error}
+        <p id={errorId} role="alert" className="flex items-start gap-1 text-xs font-medium text-rose-600 dark:text-rose-400">
+          <AlertTriangle className="mt-px size-3.5 shrink-0" aria-hidden="true" />
+          <span>{error}</span>
         </p>
       ) : hint ? (
-        <p className="text-xs leading-relaxed text-muted">{hint}</p>
+        <p id={hintId} className="text-xs leading-relaxed text-muted">
+          {hint}
+        </p>
       ) : null}
+    </div>
+  );
+}
+
+/** Native checkbox expressed as a switch. Keeps form registration and keyboard behaviour intact. */
+export function Switch({
+  id,
+  label,
+  description,
+  className,
+  disabled,
+  ...props
+}: InputHTMLAttributes<HTMLInputElement> & { id: string; label: string; description?: string }) {
+  return (
+    <div className={cn("flex items-start gap-3", className)}>
+      <span className="relative mt-0.5 inline-flex shrink-0">
+        <input
+          id={id}
+          type="checkbox"
+          role="switch"
+          disabled={disabled}
+          className="peer size-9 cursor-pointer appearance-none rounded-full border border-line bg-surface-3 transition-colors checked:border-accent checked:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:cursor-not-allowed disabled:opacity-50"
+          {...props}
+        />
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute left-0.5 top-1/2 size-3.5 -translate-y-1/2 rounded-full bg-white shadow-sm transition-transform duration-150 peer-checked:translate-x-[18px]"
+        />
+      </span>
+      <span className="min-w-0">
+        <label htmlFor={id} className="block cursor-pointer text-sm text-fg">
+          {label}
+        </label>
+        {description ? <p className="mt-0.5 text-xs leading-relaxed text-muted">{description}</p> : null}
+      </span>
     </div>
   );
 }
@@ -390,14 +534,17 @@ export function SearchInput({
 }
 
 export const Checkbox = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement> & { label: string; id: string }>(
-  function Checkbox({ id, label, ...props }, ref) {
+  function Checkbox({ id, label, className, ...props }, ref) {
     return (
-      <label htmlFor={id} className="inline-flex cursor-pointer items-center gap-2 text-sm text-fg">
+      <label
+        htmlFor={id}
+        className={cn("inline-flex cursor-pointer items-center gap-2 text-sm text-fg", className)}
+      >
         <input
           ref={ref}
           id={id}
           type="checkbox"
-          className="size-4 shrink-0 cursor-pointer rounded border-line text-accent accent-[var(--accent)]"
+          className="size-4 shrink-0 cursor-pointer rounded border-line text-accent accent-[var(--accent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
           {...props}
         />
         {label}
@@ -885,6 +1032,51 @@ export function Th({ children, className, ...props }: ThHTMLAttributes<HTMLTable
     >
       {children}
     </th>
+  );
+}
+
+/**
+ * Sortable column header. Exposes `aria-sort` on the cell and a real button inside it, so the
+ * sort affordance is keyboard reachable and announced (the previous plain clickable `th` was not).
+ */
+export function SortHeader<T extends string>({
+  column,
+  activeColumn,
+  direction,
+  onSort,
+  children,
+  className,
+}: {
+  column: T;
+  activeColumn: string;
+  direction: "asc" | "desc";
+  onSort: (column: T) => void;
+  children: ReactNode;
+  className?: string;
+}) {
+  const active = activeColumn === column;
+  const ariaSort = active ? (direction === "asc" ? "ascending" : "descending") : "none";
+  const Icon = !active ? ChevronsUpDown : direction === "asc" ? ArrowUp : ArrowDown;
+  return (
+    <Th aria-sort={ariaSort} className={cn("p-0", className)}>
+      <button
+        type="button"
+        onClick={() => onSort(column)}
+        className="flex h-full w-full items-center gap-1 px-4 py-2.5 text-left uppercase tracking-[0.06em] transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-ring"
+      >
+        {children}
+        <Icon className={cn("size-3", active ? "text-fg" : "text-faint")} aria-hidden="true" />
+      </button>
+    </Th>
+  );
+}
+
+/** Small keyboard hint, e.g. the ⌘K shortcut on the global search field. */
+export function Kbd({ children }: { children: ReactNode }) {
+  return (
+    <kbd className="rounded border border-line bg-surface px-1 py-0.5 font-sans text-[10px] font-medium leading-none text-muted">
+      {children}
+    </kbd>
   );
 }
 
