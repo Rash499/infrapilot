@@ -1,8 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { initializeAppDatabase } from "../../packages/database/src/app_db";
-import { closeMongo, getCollection } from "../../packages/database/src/mongo";
-import { collections } from "../../packages/database/src/collections";
+import { closeMongo } from "../../packages/database/src/mongo";
+import { collections, getCollection } from "../../packages/database/src/collections";
 import {
   findActiveAlert,
   listAlerts,
@@ -91,6 +91,8 @@ suite("alert lifecycle against MongoDB", () => {
     await targets.deleteMany({ id: { $in: targetIds } });
     await incidents.deleteMany({ id: { $in: incidentIds } });
     await maintenances.deleteMany({ id: { $in: maintenanceIds } });
+    const links = await getCollection(collections.maintenanceAssets);
+    await links.deleteMany({ maintenanceId: { $in: maintenanceIds } });
     await closeMongo();
   });
 

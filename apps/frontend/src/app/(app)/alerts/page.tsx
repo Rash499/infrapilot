@@ -29,7 +29,7 @@ import { useAuth } from "@/context/auth-context";
 import { useToast } from "@/context/toast-context";
 import { fetchData, fetchList, getErrorMessage, sendData } from "@/lib/client/api";
 import { useAsync } from "@/lib/client/use-async";
-import { fmtDateTime, fmtRelative, humanize } from "@/lib/format";
+import { fmtDateTime, fmtRelative, humanize, isUuid } from "@/lib/format";
 import type { Alert, AlertSummary, Pagination as PaginationMeta } from "@/types/api";
 
 const STATUS_OPTIONS = ["triggered", "acknowledged", "suppressed", "resolved"] as const;
@@ -266,7 +266,7 @@ export default function AlertsPage() {
   // Deep link from search results: /alerts?alert=<id>
   useEffect(() => {
     const id = new URLSearchParams(window.location.search).get("alert");
-    if (id) setSelected(id);
+    if (isUuid(id)) setSelected(id);
   }, []);
 
   const meta: PaginationMeta | undefined = useMemo(

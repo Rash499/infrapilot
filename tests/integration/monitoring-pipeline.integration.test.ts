@@ -1,9 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createServer, type Server } from "node:http";
 import { randomUUID } from "node:crypto";
-import { collections } from "../../packages/database/src/collections";
+import { collections, getCollection } from "../../packages/database/src/collections";
 import { initializeAppDatabase } from "../../packages/database/src/app_db";
-import { closeMongo, getCollection } from "../../packages/database/src/mongo";
+import { closeMongo } from "../../packages/database/src/mongo";
 import {
   insertMonitoringTarget,
   recordMonitoringCheck,
@@ -175,6 +175,10 @@ suite("monitoring → alert → incident pipeline", () => {
     await assets.deleteMany({ id: { $in: assetIds } });
     await incidents.deleteMany({ sourceMonitoringTargetId: { $in: targetIds } });
     await maintenances.deleteMany({ id: { $in: maintenanceIds } });
+    const results = await getCollection(collections.monitoringResults);
+    await results.deleteMany({ targetId: { $in: targetIds } });
+    const links = await getCollection(collections.maintenanceAssets);
+    await links.deleteMany({ maintenanceId: { $in: maintenanceIds } });
     await closeMongo();
   });
 
