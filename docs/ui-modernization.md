@@ -113,3 +113,95 @@ No UI dependency was added; charts still use the existing `recharts` install.
   findings* rather than presenting them as totals.
 - `react-hooks/set-state-in-effect` warnings are accepted: they come from the loading/theme
   bootstrap effects that intentionally synchronise with browser storage and fetch state.
+
+## 8. Second pass — forms, validation and interaction
+
+The follow-up pass kept the design system and shell described above and concentrated on the parts
+that were still inconsistent: how forms validate, how errors reach the user, how search behaves and
+how filters survive navigation.
+
+### 8.1 Field-level validation instead of one banner
+
+| Before | After |
+|---|---|
+| `validatePayload()` threw the first Zod issue and every failure was rendered as a single `Alert` above the form | `validateFields()` (new, `lib/client/form.ts`) maps **every** issue onto its react-hook-form field, keeps only the first message per field, and promotes unaddressable issues (object-level refinements, unknown paths) to the banner |
+| Server rejections lost their field mapping | `serverFieldErrors()` reads `error.details[].path` from the API response and highlights the same inputs the API rejected |
+| The user had to hunt for the failing input | `focusFirstInvalid()` moves focus to the first `aria-invalid` control after a failed submit |
+
+Applied to: asset registration/edit, monitoring create/edit, maintenance scheduling, incident
+creation, change drafts, security findings, settings password change, registration and password
+reset. Schemas are imported from `packages/contracts` — no second rule set exists.
+
+### 8.2 Accessible controls by construction
+
+`Field` now owns the relationship between label, control, hint and error:
+
+- generates the control id when a caller omits one, and threads it through a React context;
+- sets `aria-invalid`, `aria-required` and `aria-describedby` on `Input`, `Select`, `Textarea` and
+  `Switch` without per-call-site wiring;
+- keeps the hint mounted next to the error so `aria-describedby` never points at a missing node;
+- renders the error inside `role="alert"` with an icon, so the message is not colour-only.
+
+New primitives: `Switch` (`role="switch"`, native checkbox semantics, `/monitoring` booleans now use
+it), `PasswordInput` (show/hide toggle with `aria-pressed`), `PasswordRequirements` (text + met/not
+met for every rule), `SortHeader` (`aria-sort` on the cell, real button inside) and `Kbd`.
+
+Existing end-to-end labels were preserved deliberately: `Field` keeps the literal `*` in the
+accessible name and only appends a marker when `required` is passed without one, because
+`e2e/infrapilot.spec.ts` addresses fields by those names.
+
+### 8.3 Conditional forms and stale values
+
+- Monitoring: choosing TCP removes `url`/`expectedStatusCode` from the payload and choosing HTTP
+  removes `host`/`port`, so a type switch can never submit the other branch's values.
+- Advisory (non-blocking) warnings for a timeout longer than the interval and a threshold ladder
+  that is not ascending — the API accepts both, so the UI explains rather than blocks.
+- Maintenance and change dialogs set `min` on the end date from the selected start.
+
+### 8.4 Submission and abandonment
+
+Every dialog form now: disables its submit action only while a request is in flight, keeps the user's
+input after a recoverable failure, reports success through the existing toast, and asks
+(“Discard changes?”) when the user closes a dirty dialog. `Modal` no longer re-runs its focus effect
+on parent re-renders — the previous `[open, onClose]` dependency stole focus back to the first field
+while typing, which the new component tests caught.
+
+### 8.5 Global search
+
+`GlobalSearch` replaces the header text box. It queries `GET /search` (same endpoint and visibility
+rules as `/search`), debounces 250 ms, aborts stale requests, shows grouped results, supports
+`ArrowUp`/`ArrowDown`/`Enter`/`Escape`, announces result counts through a live region, offers a
+“view all results” link, and becomes a full-screen panel below `md`. `⌘K`/`Ctrl+K` opens it.
+
+### 8.6 Filters, tables and the URL
+
+- `/assets` persists search, type, environment, status, scope, sort and order in the URL
+  (`useUrlFilters`: read on mount, `replaceState` on change, re-read on `popstate`), shows a
+  “Clear filters” action whenever one is active, and uses `SortHeader` for real `aria-sort` semantics.
+- Trivy import: drag-and-drop plus file picker, extension/size/emptiness checks before reading, inline
+  error text, a parsing state, a result summary and “Import another report”. The file is still only
+  parsed as JSON — nothing is executed.
+
+### 8.7 Tests added in this pass
+
+| File | Covers |
+|---|---|
+| `tests/unit/form-helpers.test.ts` | per-field issue mapping, unknown-path promotion, object-level refinements, server `details[]` mapping, password rules, the shared monitor schema |
+| `tests/components/form-controls.test.tsx` | Field/aria wiring, hint+error described-by, Switch semantics, `aria-sort` and toggling, password visibility, requirement list |
+| `tests/components/global-search.test.tsx` | two-character threshold, grouping, arrow-key navigation, Enter navigation, empty state, Escape, error state |
+| `tests/components/monitoring-form.test.tsx` | HTTP↔TCP field swapping, schema errors with focus, switch descriptions |
+| `tests/components/asset-form.test.tsx` | per-field validation with focus, discard confirmation |
+| `e2e/infrapilot.spec.ts` | dialog validation + unsaved-edit guard against the running app |
+| `e2e/demo-environment.spec.ts` | search suggestions from seeded data, Escape close, sortable asset headers |
+
+### 8.8 Verification for this pass
+
+| Check | Result |
+|---|---|
+| `npm run lint` | 0 errors, 28 warnings (pre-existing `set-state-in-effect` advisories plus react-hook-form “compilation skipped” notices) |
+| `npm run typecheck` | Pass, all workspaces |
+| `npm run typecheck:demo` | Pass |
+| `npm test` | 198 passed, 9 skipped (integration suites need `MONGODB_URI`) |
+| `npm run build` | Pass |
+| Playwright | **Not run locally** — no browser binaries and the download is blocked in this environment; the suite runs in CI |
+| Screenshots at 360/390/768/1024/1366/1920 px, light/dark | **Not captured** for the same reason. Responsiveness was handled through the existing breakpoints (`sm`/`md`/`lg`/`xl`), the mobile search panel and dialog bottom-sheet behaviour, and is exercised by the Playwright viewport default in CI |
