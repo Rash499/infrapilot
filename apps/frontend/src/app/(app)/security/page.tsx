@@ -2,12 +2,13 @@
 
 import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
-import { Pencil, Plus, Search, ShieldAlert, Trash2, Upload } from "lucide-react";
+import { Loader2, Pencil, Plus, Search, ShieldAlert, Trash2, Upload } from "lucide-react";
 import { DistributionChart } from "@/components/charts";
-import { Alert, Badge, Button, Card, CardHeader, ConfirmDialog, DataTable, EmptyState, ErrorState, Field, Input, Modal, PageHeader, Pagination, Select, StatCard, StatusBadge, TableSkeleton, Td, Textarea, Th, Toolbar } from "@/components/ui";
+import { Alert, Badge, Button, Card, CardHeader, ConfirmDialog, cn, DataTable, EmptyState, ErrorState, Field, Input, Modal, PageHeader, Pagination, Select, StatCard, StatusBadge, TableSkeleton, Td, Textarea, Th, Toolbar } from "@/components/ui";
 import { useAuth } from "@/context/auth-context";
 import { useToast } from "@/context/toast-context";
 import { fetchData, fetchList, getErrorMessage, sendData, validatePayload } from "@/lib/client/api";
+import { focusFirstInvalid, serverFieldErrors, validateFields } from "@/lib/client/form";
 import { useAsync } from "@/lib/client/use-async";
 import { FINDING_STATUS_OPTIONS, SEVERITY_OPTIONS, fmtDateTime, fmtRelative, humanize } from "@/lib/format";
 import { findingCreateSchema, findingUpdateSchema } from "@/validators/schemas";
@@ -41,14 +42,22 @@ function FindingFormModal({
   users: UserOption[];
 }) {
   const toast = useToast();
-  const { register, handleSubmit, reset, setError, formState: { errors, isSubmitting } } = useForm<FindingFormValues>({
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const { register, handleSubmit, reset, setError, clearErrors, formState: { errors, isSubmitting, isDirty } } = useForm<FindingFormValues>({
     defaultValues: blank(finding),
   });
   useEffect(() => {
     if (open) reset(blank(finding));
   }, [open, finding, reset]);
 
+  const requestClose = () => {
+    if (isSubmitting) return;
+    if (isDirty) setConfirmDiscard(true);
+    else onClose();
+  };
+
   const onSubmit = handleSubmit(async (v) => {
+    clearErrors("root");
     const common = {
       title: v.title.trim(),
       description: v.description.trim(),
@@ -58,34 +67,44 @@ function FindingFormModal({
       remediation: v.remediation.trim() || null,
       cveId: v.cveId.trim() || null,
     };
+    const fields = ["title", "description", "severity", "assetId", "assigneeId", "remediation", "cveId"] as const;
+    const validation = finding
+      ? validateFields(findingUpdateSchema, { ...common, status: v.status, note: v.note.trim() || undefined }, setError, fields)
+      : validateFields(findingCreateSchema, common, setError, fields);
+    if (!validation.valid) {
+      if (validation.formError) setError("root", { message: validation.formError });
+      requestAnimationFrame(() => focusFirstInvalid(document.getElementById("finding-form")));
+      return;
+    }
     try {
       let saved: Finding;
       if (finding) {
         const payload = { ...common, status: v.status, note: v.note.trim() || undefined };
-        validatePayload(findingUpdateSchema, payload);
         saved = await sendData<Finding>("patch", `/findings/${finding.id}`, payload);
       } else {
-        validatePayload(findingCreateSchema, common);
         saved = await sendData<Finding>("post", "/findings", common);
       }
       toast.success(finding ? "Finding updated" : "Finding recorded");
       onSaved(saved);
       onClose();
     } catch (err) {
-      setError("root", { message: getErrorMessage(err) });
+      const mapped = serverFieldErrors(err, setError, fields);
+      if (!mapped.firstField) setError("root", { message: getErrorMessage(err) });
+      requestAnimationFrame(() => focusFirstInvalid(document.getElementById("finding-form")));
     }
   });
 
   return (
+    <>
     <Modal
       open={open}
-      onClose={onClose}
+      onClose={requestClose}
       size="lg"
       title={finding ? "Edit security finding" : "Record security finding"}
       description="Findings capture vulnerabilities, misconfigurations and risks against infrastructure assets."
       footer={
         <>
-          <Button variant="outline" onClick={onClose} disabled={isSubmitting}>
+          <Button variant="outline" onClick={requestClose} disabled={isSubmitting}>
             Cancel
           </Button>
           <Button type="submit" form="finding-form" loading={isSubmitting}>
@@ -96,12 +115,12 @@ function FindingFormModal({
     >
       <form id="finding-form" onSubmit={onSubmit} className="grid gap-4 sm:grid-cols-2" noValidate>
         {errors.root?.message ? (
-          <Alert tone="danger" className="sm:col-span-2">{errors.root.message}</Alert>
+          <Alert tone="danger" className="sm:col-span-2" title="Could not save this finding">{errors.root.message}</Alert>
         ) : null}
-        <Field label="Title *" htmlFor="f-title" className="sm:col-span-2">
-          <Input id="f-title" {...register("title", { required: "Title is required" })} placeholder="Outdated TLS configuration on load balancer" />
+        <Field label="Title *" htmlFor="f-title" error={errors.title?.message} className="sm:col-span-2">
+          <Input id="f-title" {...register("title")} maxLength={200} placeholder="Outdated TLS configuration on load balancer" />
         </Field>
-        <Field label="Severity *" htmlFor="f-sev">
+        <Field label="Severity *" htmlFor="f-sev" error={errors.severity?.message} hint="Drives the remediation deadline.">
           <Select id="f-sev" {...register("severity")}>
             {SEVERITY_OPTIONS.map((o) => (
               <option key={o.value} value={o.value}>
@@ -110,10 +129,10 @@ function FindingFormModal({
             ))}
           </Select>
         </Field>
-        <Field label="CVE identifier" htmlFor="f-cve" hint="Optional, e.g. CVE-2024-12345">
+        <Field label="CVE identifier" htmlFor="f-cve" error={errors.cveId?.message} hint="Optional, e.g. CVE-2024-12345">
           <Input id="f-cve" {...register("cveId")} placeholder="CVE-2024-12345" />
         </Field>
-        <Field label="Affected asset" htmlFor="f-asset">
+        <Field label="Affected asset" htmlFor="f-asset" error={errors.assetId?.message}>
           <Select id="f-asset" {...register("assetId")}>
             <option value="">Not linked</option>
             {assets.map((a) => (
@@ -123,7 +142,7 @@ function FindingFormModal({
             ))}
           </Select>
         </Field>
-        <Field label="Responsible user" htmlFor="f-assignee">
+        <Field label="Responsible user" htmlFor="f-assignee" error={errors.assigneeId?.message}>
           <Select id="f-assignee" {...register("assigneeId")}>
             <option value="">Unassigned</option>
             {users.map((u) => (
@@ -133,15 +152,15 @@ function FindingFormModal({
             ))}
           </Select>
         </Field>
-        <Field label="Description *" htmlFor="f-desc" className="sm:col-span-2">
-          <Textarea id="f-desc" rows={3} {...register("description", { required: "Description is required" })} />
+        <Field label="Description *" htmlFor="f-desc" error={errors.description?.message} className="sm:col-span-2">
+          <Textarea id="f-desc" rows={3} {...register("description")} />
         </Field>
-        <Field label="Remediation recommendation" htmlFor="f-rem" className="sm:col-span-2">
+        <Field label="Remediation recommendation" htmlFor="f-rem" error={errors.remediation?.message} hint="What the owner should do, and by when." className="sm:col-span-2">
           <Textarea id="f-rem" rows={3} {...register("remediation")} />
         </Field>
         {finding ? (
           <>
-            <Field label="Remediation status" htmlFor="f-status">
+            <Field label="Remediation status" htmlFor="f-status" error={errors.status?.message}>
               <Select id="f-status" {...register("status")}>
                 {FINDING_STATUS_OPTIONS.map((o) => (
                   <option key={o.value} value={o.value}>
@@ -150,13 +169,26 @@ function FindingFormModal({
                 ))}
               </Select>
             </Field>
-            <Field label="Update note" htmlFor="f-note" hint="Required when accepting risk (justification).">
+            <Field label="Update note" htmlFor="f-note" error={errors.note?.message} hint="Required when accepting risk (justification).">
               <Input id="f-note" {...register("note")} />
             </Field>
           </>
         ) : null}
       </form>
     </Modal>
+
+    <ConfirmDialog
+      open={confirmDiscard}
+      title="Discard this finding?"
+      description="The finding has unsaved details. Closing the dialog will discard them."
+      confirmLabel="Discard changes"
+      onCancel={() => setConfirmDiscard(false)}
+      onConfirm={() => {
+        setConfirmDiscard(false);
+        onClose();
+      }}
+    />
+    </>
   );
 }
 
@@ -190,42 +222,55 @@ function TrivyImportModal({
   const [fileName, setFileName] = useState("");
   const [result, setResult] = useState<TrivyImportResult | null>(null);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [dragging, setDragging] = useState(false);
 
   useEffect(() => {
     if (!open) {
       setAssetId("");
       setFileName("");
       setResult(null);
+      setError(null);
+      setDragging(false);
     }
   }, [open]);
 
   const onFile = async (file: File | undefined) => {
     if (!file) return;
+    setError(null);
+    setResult(null);
     if (!assetId) {
-      toast.error("Select the asset this report describes first");
+      setError("Select the asset this report describes before choosing a file.");
+      return;
+    }
+    if (!/\.json$/i.test(file.name) && file.type !== "application/json") {
+      setError(`${file.name} is not a .json report. Export the report with: trivy image --format json -o report.json <image>`);
       return;
     }
     if (file.size > 2 * 1024 * 1024) {
-      toast.error("Trivy reports must be 2 MB or smaller");
+      setError(`${file.name} is ${(file.size / 1024 / 1024).toFixed(1)} MB. Trivy reports must be 2 MB or smaller.`);
+      return;
+    }
+    if (file.size === 0) {
+      setError(`${file.name} is empty.`);
       return;
     }
     setBusy(true);
-    setResult(null);
+    setFileName(file.name);
     try {
       const text = await file.text();
       let report: unknown;
       try {
         report = JSON.parse(text);
       } catch {
-        throw new Error("The selected file is not valid JSON");
+        throw new Error("The selected file is not valid JSON. Re-export the report and try again.");
       }
       const imported = await sendData<TrivyImportResult>("post", "/security/imports", { assetId, report });
-      setFileName(file.name);
       setResult(imported);
       toast.success(`${imported.findingsCreated} new findings imported`);
       onImported();
     } catch (err) {
-      toast.error(getErrorMessage(err));
+      setError(getErrorMessage(err));
     } finally {
       setBusy(false);
     }
@@ -238,7 +283,7 @@ function TrivyImportModal({
       title="Import Trivy report"
       description="Upload a Trivy JSON report produced elsewhere (trivy image --format json). InfraPilot parses it; it never executes the file or runs a live scan."
     >
-      <div className="space-y-4">
+      <div className="space-y-4" aria-busy={busy}>
         <Field label="Asset *" htmlFor="trivy-asset" hint="Findings are attached to this asset and deduplicated by CVE + package">
           <Select id="trivy-asset" value={assetId} onChange={(e) => setAssetId(e.target.value)} disabled={!!result}>
             <option value="">Select an asset</option>
@@ -249,17 +294,47 @@ function TrivyImportModal({
             ))}
           </Select>
         </Field>
-        <Field label="Report file (.json)" htmlFor="trivy-file" hint="Maximum 2 MB and 1,000 vulnerabilities per import">
-          <input
-            id="trivy-file"
-            type="file"
-            accept="application/json,.json"
-            disabled={busy || !assetId || !!result}
-            onChange={(e) => void onFile(e.target.files?.[0])}
-            className="block w-full cursor-pointer rounded-md border border-line bg-surface px-3 py-2 text-sm text-fg file:mr-3 file:rounded file:border-0 file:bg-accent-soft file:px-3 file:py-1 file:text-xs file:font-medium file:text-accent"
-          />
+        <Field
+          label="Report file (.json)"
+          htmlFor="trivy-file"
+          error={error ?? undefined}
+          hint="JSON produced by `trivy image --format json`. Maximum 2 MB and 1,000 vulnerabilities per import."
+        >
+          <div
+            onDragOver={(event) => {
+              if (busy || !assetId || result) return;
+              event.preventDefault();
+              setDragging(true);
+            }}
+            onDragLeave={() => setDragging(false)}
+            onDrop={(event) => {
+              event.preventDefault();
+              setDragging(false);
+              if (busy || result) return;
+              void onFile(event.dataTransfer.files?.[0]);
+            }}
+            className={cn(
+              "rounded-lg border border-dashed p-4 transition-colors",
+              dragging ? "border-accent bg-accent-soft" : "border-line-strong bg-surface-2/40",
+            )}
+          >
+            <input
+              id="trivy-file"
+              type="file"
+              accept="application/json,.json"
+              disabled={busy || !assetId || !!result}
+              onChange={(e) => void onFile(e.target.files?.[0])}
+              className="block w-full cursor-pointer text-sm text-fg file:mr-3 file:cursor-pointer file:rounded file:border-0 file:bg-accent-soft file:px-3 file:py-1.5 file:text-xs file:font-medium file:text-accent disabled:cursor-not-allowed disabled:opacity-60"
+            />
+            <p className="mt-2 text-xs text-muted">Drag a report here, or choose a file. Nothing is executed — the JSON is parsed as data only.</p>
+          </div>
         </Field>
-        {busy ? <p className="text-xs text-muted">Parsing and importing…</p> : null}
+        {busy ? (
+          <p className="flex items-center gap-2 text-xs text-muted">
+            <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+            Parsing {fileName || "report"} and importing findings…
+          </p>
+        ) : null}
         {result ? (
           <div className="space-y-2 rounded-lg border border-line bg-surface-2/50 p-3 text-xs">
             <p className="text-sm font-medium text-fg">{fileName}</p>
@@ -279,6 +354,22 @@ function TrivyImportModal({
               <p className="text-muted">Skipped entries: {result.skipped.map((row) => `${row.id} (${row.reason})`).join(", ")}</p>
             ) : null}
             <p className="text-muted">Imported findings reflect the report&apos;s scan, not a live scan performed by InfraPilot.</p>
+          </div>
+        ) : null}
+        {result ? (
+          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line pt-3">
+            <p className="text-xs text-muted">Imported from {fileName}. Re-import to refresh existing findings.</p>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setResult(null);
+                setFileName("");
+                setError(null);
+              }}
+            >
+              Import another report
+            </Button>
           </div>
         ) : null}
       </div>

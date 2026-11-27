@@ -4,11 +4,12 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { useForm, type Resolver } from "react-hook-form";
+
 import { zodResolver } from "@hookform/resolvers/zod";
 import { ShieldCheck } from "lucide-react";
 import { useAuth } from "@/context/auth-context";
 import { getErrorMessage } from "@/lib/client/api";
-import { Alert, Button, Card, Field, Input } from "@/components/ui";
+import { Alert, Button, Card, Field, Input, PasswordInput, PasswordRequirements } from "@/components/ui";
 import { registerSchema } from "@/validators/schemas";
 
 type FormValues = { name: string; email: string; password: string };
@@ -20,11 +21,14 @@ export default function RegisterPage() {
   const {
     register,
     handleSubmit,
+    watch,
+    setFocus,
     formState: { errors, isSubmitting },
   } = useForm<FormValues>({
     resolver: zodResolver(registerSchema) as unknown as Resolver<FormValues>,
     defaultValues: { name: "", email: "", password: "" },
   });
+  const password = watch("password");
 
   const onSubmit = handleSubmit(async (values) => {
     setServerError(null);
@@ -34,6 +38,9 @@ export default function RegisterPage() {
     } catch (err) {
       setServerError(getErrorMessage(err));
     }
+  }, (invalid) => {
+    const first = (["name", "email", "password"] as const).find((field) => invalid[field]);
+    if (first) setFocus(first);
   });
 
   return (
@@ -69,14 +76,14 @@ export default function RegisterPage() {
           hint="At least 12 characters with upper, lower case and a number."
           required
         >
-          <Input
+          <PasswordInput
             id="reg-password"
-            type="password"
             autoComplete="new-password"
             placeholder="••••••••••••"
-            aria-invalid={errors.password ? true : undefined}
+            aria-describedby="reg-password-rules"
             {...register("password")}
           />
+          <PasswordRequirements value={password ?? ""} id="reg-password-rules" />
         </Field>
 
         <Button type="submit" className="mt-1 w-full" loading={isSubmitting}>

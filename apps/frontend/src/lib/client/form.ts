@@ -131,7 +131,7 @@ export function focusFirstInvalid(form: ParentNode | null): void {
     '[aria-invalid="true"]:not([disabled]), [data-invalid="true"]:not([disabled])',
   );
   target?.focus();
-  target?.scrollIntoView({ block: "nearest" });
+  if (typeof target?.scrollIntoView === "function") target.scrollIntoView({ block: "nearest" });
 }
 
 /** Requirement checklist for password fields; mirrors the shared `passwordSchema` rules. */

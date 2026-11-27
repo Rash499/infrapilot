@@ -8,7 +8,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { LogIn } from "lucide-react";
 import { useAuth } from "@/context/auth-context";
 import { getErrorMessage } from "@/lib/client/api";
-import { Alert, Button, Card, Field, Input } from "@/components/ui";
+import { Alert, Button, Card, Field, Input, PasswordInput } from "@/components/ui";
 import { loginSchema } from "@/validators/schemas";
 
 type FormValues = { email: string; password: string };
@@ -64,9 +64,8 @@ export default function LoginPage() {
           />
         </Field>
         <Field label="Password" htmlFor="login-password" error={errors.password?.message} required>
-          <Input
+          <PasswordInput
             id="login-password"
-            type="password"
             autoComplete="current-password"
             placeholder="••••••••••••"
             aria-invalid={errors.password ? true : undefined}

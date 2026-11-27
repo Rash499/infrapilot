@@ -52,6 +52,34 @@ test.describe("demo environment", () => {
     await expect(page.getByText("prd-db-01 PostgreSQL (TCP)").first()).toBeVisible();
   });
 
+  test("global search suggests seeded records and closes with Escape", async ({ page }) => {
+    await signIn(page, adminEmail);
+
+    const input = page.getByRole("combobox", { name: "Global search" });
+    await input.fill("prd-db-01");
+
+    const listbox = page.getByRole("listbox", { name: "Search results" });
+    await expect(listbox).toBeVisible();
+    await expect(listbox.getByRole("option").first()).toContainText("prd-db-01");
+    await expect(listbox.getByText("Assets").first()).toBeVisible();
+
+    await page.keyboard.press("Escape");
+    await expect(listbox).toBeHidden();
+    await expect(input).toHaveValue("");
+  });
+
+  test("asset inventory sorts through accessible column headers", async ({ page }) => {
+    await signIn(page, adminEmail);
+    await page.goto("/assets");
+
+    const statusHeader = page.getByRole("columnheader", { name: /Status/ });
+    await expect(statusHeader).toHaveAttribute("aria-sort", "none");
+    await page.getByRole("button", { name: "Status" }).click();
+    await expect(statusHeader).toHaveAttribute("aria-sort", "ascending");
+    await page.getByRole("button", { name: "Status" }).click();
+    await expect(statusHeader).toHaveAttribute("aria-sort", "descending");
+  });
+
   test("monitoring page shows healthy, unavailable and paused services", async ({ page }) => {
     await signIn(page, adminEmail);
     await page.goto("/monitoring");

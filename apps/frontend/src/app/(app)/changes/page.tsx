@@ -4,10 +4,11 @@ import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { GitPullRequest, Pencil, Plus, Search } from "lucide-react";
 import { AssetPicker } from "@/components/forms/asset-picker";
-import { Alert, Badge, Button, Card, DataTable, EmptyState, ErrorState, Field, Input, Modal, PageHeader, Pagination, Select, StatusBadge, TableSkeleton, Td, Textarea, Th, Toolbar, type Tone } from "@/components/ui";
+import { Alert, Badge, Button, Card, ConfirmDialog, DataTable, EmptyState, ErrorState, Field, Input, Modal, PageHeader, Pagination, Select, StatusBadge, TableSkeleton, Td, Textarea, Th, Toolbar, type Tone } from "@/components/ui";
 import { useAuth } from "@/context/auth-context";
 import { useToast } from "@/context/toast-context";
 import { fetchData, fetchList, getErrorMessage, sendData, validatePayload } from "@/lib/client/api";
+import { focusFirstInvalid, serverFieldErrors, validateFields } from "@/lib/client/form";
 import { useAsync } from "@/lib/client/use-async";
 import { CHANGE_STATUS_OPTIONS, RISK_OPTIONS, fmtDateTime, fmtRelative, fromDatetimeLocal, humanize, toDatetimeLocal } from "@/lib/format";
 import { changeCreateSchema, changeTransitionSchema } from "@/validators/schemas";
@@ -57,7 +58,15 @@ function ChangeFormModal({
   const toast = useToast();
   const [assetIds, setAssetIds] = useState<string[]>([]);
   const [formError, setFormError] = useState<string | null>(null);
-  const { register, handleSubmit, reset, formState: { errors, isSubmitting } } = useForm<ChangeFormValues>({ defaultValues: blank(null) });
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const { register, handleSubmit, reset, watch, setError, clearErrors, formState: { errors, isSubmitting, isDirty } } = useForm<ChangeFormValues>({ defaultValues: blank(null) });
+  const plannedStart = watch("plannedStartAt");
+
+  const requestClose = () => {
+    if (isSubmitting) return;
+    if (isDirty || assetIds.length > 0) setConfirmDiscard(true);
+    else onClose();
+  };
 
   useEffect(() => {
     if (open) {
@@ -68,6 +77,7 @@ function ChangeFormModal({
   }, [open, change, reset]);
 
   const onSubmit = handleSubmit(async (v) => {
+    clearErrors("root");
     const payload = {
       title: v.title.trim(),
       description: v.description.trim(),
@@ -80,28 +90,56 @@ function ChangeFormModal({
       implementerId: v.implementerId || null,
       assetIds,
     };
+    const validation = validateFields(changeCreateSchema, payload, setError, [
+      "title",
+      "description",
+      "reason",
+      "riskLevel",
+      "riskAssessment",
+      "rollbackPlan",
+      "plannedStartAt",
+      "plannedEndAt",
+      "implementerId",
+    ]);
+    if (!validation.valid) {
+      if (validation.formError) setFormError(validation.formError);
+      requestAnimationFrame(() => focusFirstInvalid(document.getElementById("change-form")));
+      return;
+    }
     try {
-      validatePayload(changeCreateSchema, payload);
       if (change) await sendData("patch", `/changes/${change.id}`, payload);
       else await sendData("post", "/changes", payload);
       toast.success(change ? "Change request updated" : "Change request drafted");
       onSaved();
       onClose();
     } catch (err) {
-      setFormError(getErrorMessage(err));
+      const mapped = serverFieldErrors(err, setError, [
+        "title",
+        "description",
+        "reason",
+        "riskLevel",
+        "riskAssessment",
+        "rollbackPlan",
+        "plannedStartAt",
+        "plannedEndAt",
+        "implementerId",
+      ]);
+      if (!mapped.firstField) setFormError(getErrorMessage(err));
+      requestAnimationFrame(() => focusFirstInvalid(document.getElementById("change-form")));
     }
   });
 
   return (
+    <>
     <Modal
       open={open}
-      onClose={onClose}
+      onClose={requestClose}
       size="lg"
       title={change ? `Edit ${change.reference}` : "New change request"}
       description="Record what changes, why, the risk, and how to roll back. Submit it for approval when ready."
       footer={
         <>
-          <Button variant="outline" onClick={onClose} disabled={isSubmitting}>
+          <Button variant="outline" onClick={requestClose} disabled={isSubmitting}>
             Cancel
           </Button>
           <Button type="submit" form="change-form" loading={isSubmitting}>
@@ -112,18 +150,18 @@ function ChangeFormModal({
     >
       <form id="change-form" onSubmit={onSubmit} className="grid gap-4 sm:grid-cols-2" noValidate>
         {formError ? (
-          <Alert tone="danger" className="sm:col-span-2">{formError}</Alert>
+          <Alert tone="danger" className="sm:col-span-2" title="Could not save this change">{formError}</Alert>
         ) : null}
         <Field label="Title *" htmlFor="c-title" error={errors.title?.message} className="sm:col-span-2">
-          <Input id="c-title" {...register("title", { required: "Title is required" })} placeholder="Upgrade load balancer TLS policy" />
+          <Input id="c-title" {...register("title")} maxLength={200} placeholder="Upgrade load balancer TLS policy" />
         </Field>
-        <Field label="Change description *" htmlFor="c-desc" error={errors.description?.message} className="sm:col-span-2">
-          <Textarea id="c-desc" rows={3} {...register("description", { required: "Description is required" })} />
+        <Field label="Change description *" htmlFor="c-desc" error={errors.description?.message} hint="What the change does, step by step." className="sm:col-span-2">
+          <Textarea id="c-desc" rows={3} {...register("description")} />
         </Field>
-        <Field label="Reason for change *" htmlFor="c-reason" error={errors.reason?.message} className="sm:col-span-2">
-          <Textarea id="c-reason" rows={2} {...register("reason", { required: "A reason is required" })} />
+        <Field label="Reason for change *" htmlFor="c-reason" error={errors.reason?.message} hint="The problem this change solves or the risk it removes." className="sm:col-span-2">
+          <Textarea id="c-reason" rows={2} {...register("reason")} />
         </Field>
-        <Field label="Risk level" htmlFor="c-risk">
+        <Field label="Risk level" htmlFor="c-risk" error={errors.riskLevel?.message} hint="Drives the approval requirement.">
           <Select id="c-risk" {...register("riskLevel")}>
             {RISK_OPTIONS.map((o) => (
               <option key={o.value} value={o.value}>
@@ -132,7 +170,7 @@ function ChangeFormModal({
             ))}
           </Select>
         </Field>
-        <Field label="Implementer" htmlFor="c-impl">
+        <Field label="Implementer" htmlFor="c-impl" error={errors.implementerId?.message}>
           <Select id="c-impl" {...register("implementerId")}>
             <option value="">Not yet assigned</option>
             {users.map((u) => (
@@ -142,16 +180,16 @@ function ChangeFormModal({
             ))}
           </Select>
         </Field>
-        <Field label="Planned start" htmlFor="c-start">
+        <Field label="Planned start" htmlFor="c-start" error={errors.plannedStartAt?.message}>
           <Input id="c-start" type="datetime-local" {...register("plannedStartAt")} />
         </Field>
-        <Field label="Planned end" htmlFor="c-end">
-          <Input id="c-end" type="datetime-local" {...register("plannedEndAt")} />
+        <Field label="Planned end" htmlFor="c-end" error={errors.plannedEndAt?.message} hint="Must be after the planned start.">
+          <Input id="c-end" type="datetime-local" min={plannedStart} {...register("plannedEndAt")} />
         </Field>
-        <Field label="Risk assessment" htmlFor="c-risk-text" hint="Required before submission." className="sm:col-span-2">
+        <Field label="Risk assessment" htmlFor="c-risk-text" error={errors.riskAssessment?.message} hint="Required before submission." className="sm:col-span-2">
           <Textarea id="c-risk-text" rows={2} {...register("riskAssessment")} />
         </Field>
-        <Field label="Rollback plan" htmlFor="c-rollback" hint="Required before submission." className="sm:col-span-2">
+        <Field label="Rollback plan" htmlFor="c-rollback" error={errors.rollbackPlan?.message} hint="Required before submission." className="sm:col-span-2">
           <Textarea id="c-rollback" rows={2} {...register("rollbackPlan")} />
         </Field>
         <Field label="Affected assets" className="sm:col-span-2">
@@ -159,6 +197,19 @@ function ChangeFormModal({
         </Field>
       </form>
     </Modal>
+
+    <ConfirmDialog
+      open={confirmDiscard}
+      title="Discard this draft?"
+      description="The change request has unsaved details. Closing the dialog will discard them."
+      confirmLabel="Discard draft"
+      onCancel={() => setConfirmDiscard(false)}
+      onConfirm={() => {
+        setConfirmDiscard(false);
+        onClose();
+      }}
+    />
+    </>
   );
 }
 

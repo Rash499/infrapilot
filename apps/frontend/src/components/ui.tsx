@@ -20,6 +20,8 @@ import {
 import {
   AlertTriangle,
   ArrowDown,
+  CheckCircle2,
+  Info,
   ArrowUp,
   ChevronLeft,
   ChevronRight,
@@ -33,6 +35,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { humanize } from "@/lib/format";
+import { passwordChecks } from "@/lib/client/form";
 import type { Pagination as PaginationMeta } from "@/types/api";
 
 export function cn(...classes: Array<string | false | null | undefined>): string {
@@ -312,7 +315,9 @@ function mergeAria(
   invalid: InputHTMLAttributes<HTMLElement>["aria-invalid"],
 ) {
   if (!ctx) return { "aria-invalid": invalid, "aria-describedby": describedBy, "aria-required": undefined };
-  const ids = [describedBy, ctx.invalid ? ctx.errorId : ctx.hintId].filter(Boolean).join(" ");
+  // Hint and error are both rendered by Field, so both are referenced: whichever one is present
+  // stays announced, and the id never points at a node that is missing.
+  const ids = [describedBy, ctx.hintId, ctx.invalid ? ctx.errorId : undefined].filter(Boolean).join(" ");
   return {
     "aria-invalid": invalid ?? (ctx.invalid ? true : undefined),
     "aria-describedby": ids || undefined,
@@ -391,6 +396,33 @@ export function PasswordInput({ className, ...props }: InputHTMLAttributes<HTMLI
   );
 }
 
+/**
+ * Live password requirements. Each rule is text + state (never colour alone) and the whole list is
+ * announced politely as the user types, replacing a single error that only appears on submit.
+ */
+export function PasswordRequirements({ value, id }: { value: string; id?: string }) {
+  const checks = passwordChecks(value);
+  return (
+    <ul id={id} className="mt-1.5 grid gap-1 text-xs sm:grid-cols-2" aria-live="polite">
+      {checks.map((check) => (
+        <li
+          key={check.id}
+          className={cn(
+            "flex items-center gap-1.5",
+            check.met ? "text-emerald-700 dark:text-emerald-400" : "text-muted",
+          )}
+        >
+          <span aria-hidden="true" className={cn("grid size-3.5 shrink-0 place-items-center rounded-full border text-[9px]", check.met ? "border-emerald-500/40 bg-emerald-500/15" : "border-line-strong")}>
+            {check.met ? "✓" : ""}
+          </span>
+          {check.label}
+          <span className="sr-only">{check.met ? "(met)" : "(not met)"}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 export function Field({
   label,
   htmlFor,
@@ -437,14 +469,15 @@ export function Field({
         ) : null}
       </label>
       <FieldContext.Provider value={context}>{children}</FieldContext.Provider>
+      {hint ? (
+        <p id={hintId} className="text-xs leading-relaxed text-muted">
+          {hint}
+        </p>
+      ) : null}
       {error ? (
         <p id={errorId} role="alert" className="flex items-start gap-1 text-xs font-medium text-rose-600 dark:text-rose-400">
           <AlertTriangle className="mt-px size-3.5 shrink-0" aria-hidden="true" />
           <span>{error}</span>
-        </p>
-      ) : hint ? (
-        <p id={hintId} className="text-xs leading-relaxed text-muted">
-          {hint}
         </p>
       ) : null}
     </div>
@@ -581,18 +614,29 @@ export function Modal({
   const descriptionId = useId();
   const panelRef = useRef<HTMLDivElement>(null);
   const restoreFocusRef = useRef<HTMLElement | null>(null);
+  // Callers commonly pass an inline closure; keeping it in a ref means the focus/scroll-lock setup
+  // runs only when the dialog opens instead of on every parent render (which stole focus mid-typing).
+  const onCloseRef = useRef(onClose);
+
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  });
 
   useEffect(() => {
     if (!open) return;
     restoreFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const panel = panelRef.current;
-    const firstField = panel?.querySelector<HTMLElement>(FOCUSABLE);
+    // Prefer the first form control so keyboard users start in the form, not on "Close".
+    const firstControl = panel?.querySelector<HTMLElement>(
+      'input:not([type="hidden"]):not([disabled]), select:not([disabled]), textarea:not([disabled])',
+    );
+    const firstField = firstControl ?? panel?.querySelector<HTMLElement>(FOCUSABLE);
     (firstField ?? panel)?.focus();
 
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.stopPropagation();
-        onClose();
+        onCloseRef.current();
         return;
       }
       if (event.key !== "Tab" || !panel) return;
@@ -618,7 +662,7 @@ export function Modal({
       document.body.style.overflow = previous;
       restoreFocusRef.current?.focus();
     };
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open) return null;
   const width = size === "lg" ? "sm:max-w-3xl" : size === "sm" ? "sm:max-w-md" : "sm:max-w-xl";
@@ -789,12 +833,13 @@ export function Alert({
     danger: "text-rose-600 dark:text-rose-400",
     info: "text-accent",
   };
+  const Icon = tone === "success" ? CheckCircle2 : tone === "warning" || tone === "danger" ? AlertTriangle : Info;
   return (
     <div
       className={cn("flex w-full items-start gap-2.5 rounded-lg border px-3 py-2.5 text-sm", `tone-${tone}`, className)}
       role={tone === "danger" ? "alert" : "status"}
     >
-      <AlertTriangle className={cn("mt-0.5 size-4 shrink-0", iconTone[tone])} aria-hidden="true" />
+      <Icon className={cn("mt-0.5 size-4 shrink-0", iconTone[tone])} aria-hidden="true" />
       <span className="min-w-0">
         {title ? <span className="block font-semibold">{title}</span> : null}
         <span className="block leading-relaxed">{children}</span>

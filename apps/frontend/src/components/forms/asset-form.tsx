@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { getErrorMessage, sendData } from "@/lib/client/api";
 import { focusFirstInvalid, serverFieldErrors, validateFields } from "@/lib/client/form";
@@ -65,7 +65,6 @@ export function AssetFormModal({
   owners: UserOption[];
 }) {
   const toast = useToast();
-  const formRef = useRef<HTMLFormElement>(null);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const {
     register,
@@ -105,7 +104,7 @@ export function AssetFormModal({
     const validation = validateFields(assetCreateSchema, payload, setError, FIELDS);
     if (!validation.valid) {
       if (validation.formError) setError("root", { message: validation.formError });
-      requestAnimationFrame(() => focusFirstInvalid(formRef.current));
+      requestAnimationFrame(() => focusFirstInvalid(document.getElementById("asset-form")));
       return;
     }
 
@@ -120,7 +119,7 @@ export function AssetFormModal({
     } catch (err) {
       const mapped = serverFieldErrors(err, setError, FIELDS);
       if (!mapped.firstField) setError("root", { message: getErrorMessage(err) });
-      requestAnimationFrame(() => focusFirstInvalid(formRef.current));
+      requestAnimationFrame(() => focusFirstInvalid(document.getElementById("asset-form")));
     }
   });
 
@@ -143,7 +142,7 @@ export function AssetFormModal({
           </>
         }
       >
-        <form ref={formRef} id="asset-form" onSubmit={onSubmit} className="space-y-5" noValidate>
+        <form id="asset-form" onSubmit={onSubmit} className="space-y-5" noValidate>
           {errors.root?.message ? <Alert tone="danger" title="Could not save this asset">{errors.root.message}</Alert> : null}
 
           <FormSection title="Identity" description="How operators find this system in the inventory.">

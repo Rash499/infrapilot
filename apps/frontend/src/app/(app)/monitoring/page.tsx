@@ -94,7 +94,6 @@ function MonitorFormModal({
   isAdmin: boolean;
 }) {
   const toast = useToast();
-  const formRef = useRef<HTMLFormElement>(null);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const {
     register,
@@ -161,7 +160,7 @@ function MonitorFormModal({
     const validation = validateFields(monitorCreateSchema, payload, setError, MONITOR_FIELDS);
     if (!validation.valid) {
       if (validation.formError) setError("root", { message: validation.formError });
-      requestAnimationFrame(() => focusFirstInvalid(formRef.current));
+      requestAnimationFrame(() => focusFirstInvalid(document.getElementById("monitor-form")));
       return;
     }
 
@@ -175,7 +174,7 @@ function MonitorFormModal({
     } catch (err) {
       const mapped = serverFieldErrors(err, setError, MONITOR_FIELDS);
       if (!mapped.firstField) setError("root", { message: getErrorMessage(err) });
-      requestAnimationFrame(() => focusFirstInvalid(formRef.current));
+      requestAnimationFrame(() => focusFirstInvalid(document.getElementById("monitor-form")));
     }
   });
 
@@ -198,7 +197,7 @@ function MonitorFormModal({
           </>
         }
       >
-        <form ref={formRef} id="monitor-form" onSubmit={onSubmit} className="space-y-5" noValidate>
+        <form id="monitor-form" onSubmit={onSubmit} className="space-y-5" noValidate>
           {errors.root?.message ? (
             <Alert tone="danger" title="Could not save this check">
               {errors.root.message}
