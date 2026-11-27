@@ -8,7 +8,13 @@ export default defineConfig({
   expect: { timeout: 10_000 },
   fullyParallel: false,
   retries: process.env.CI ? 1 : 0,
-  reporter: [["list"], ["html", { open: "never" }]],
+  // Keep artifacts at the repository root so CI can upload them as-is.
+  outputDir: "../../test-results",
+  reporter: [
+    ["list"],
+    ["html", { open: "never", outputFolder: "../../playwright-report" }],
+    ...(process.env.CI ? [["json", { outputFile: "/tmp/playwright.json" }] as [string, unknown]] : []),
+  ],
   use: {
     baseURL,
     trace: "retain-on-failure",
