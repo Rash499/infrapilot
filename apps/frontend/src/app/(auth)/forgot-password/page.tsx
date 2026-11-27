@@ -6,7 +6,7 @@ import { useForm, type Resolver } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { ArrowLeft, KeyRound, MailCheck } from "lucide-react";
 import { getErrorMessage, sendData } from "@/lib/client/api";
-import { Alert, Button, Card, Field, Input } from "@/components/ui";
+import { Alert, Button, Card, Field, Input, PasswordInput, PasswordRequirements } from "@/components/ui";
 import { forgotPasswordSchema, resetPasswordSchema } from "@/validators/schemas";
 
 type EmailValues = { email: string };
@@ -47,7 +47,10 @@ export default function ForgotPasswordPage() {
     }
     const parsed = resetPasswordSchema.safeParse({ token, password: values.password });
     if (!parsed.success) {
-      setError(parsed.error.issues[0]?.message ?? "Invalid password");
+      const issue = parsed.error.issues[0];
+      const field = issue?.path[0] === "password" ? "password" : undefined;
+      if (field) resetForm.setError("password", { message: issue?.message ?? "Invalid password" });
+      else setError(issue?.message ?? "Invalid password");
       return;
     }
     try {
@@ -77,12 +80,14 @@ export default function ForgotPasswordPage() {
             label="New password"
             htmlFor="new-password"
             hint="At least 12 characters with upper, lower case and a number."
+            error={resetForm.formState.errors.password?.message}
             required
           >
-            <Input id="new-password" type="password" autoComplete="new-password" {...resetForm.register("password")} />
+            <PasswordInput id="new-password" autoComplete="new-password" {...resetForm.register("password")} />
+            <PasswordRequirements value={resetForm.watch("password")} />
           </Field>
           <Field label="Confirm password" htmlFor="confirm-password" error={resetForm.formState.errors.confirm?.message} required>
-            <Input id="confirm-password" type="password" autoComplete="new-password" {...resetForm.register("confirm")} />
+            <PasswordInput id="confirm-password" autoComplete="new-password" {...resetForm.register("confirm")} />
           </Field>
           <Button type="submit" className="w-full" loading={resetForm.formState.isSubmitting}>
             Update password

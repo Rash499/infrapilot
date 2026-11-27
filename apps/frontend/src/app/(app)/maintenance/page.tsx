@@ -1,13 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import { CalendarClock, Pencil, Plus, Search, Trash2 } from "lucide-react";
 import { AssetPicker } from "@/components/forms/asset-picker";
 import { Alert, Button, Card, ConfirmDialog, DataTable, EmptyState, ErrorState, Field, Input, Modal, PageHeader, Pagination, Select, StatusBadge, TableSkeleton, Td, Textarea, Th, Toolbar } from "@/components/ui";
 import { useAuth } from "@/context/auth-context";
 import { useToast } from "@/context/toast-context";
-import { fetchData, fetchList, getErrorMessage, sendData, validatePayload } from "@/lib/client/api";
+import { fetchData, fetchList, getErrorMessage, sendData } from "@/lib/client/api";
+import { focusFirstInvalid, serverFieldErrors, validateFields } from "@/lib/client/form";
 import { useAsync } from "@/lib/client/use-async";
 import { MAINTENANCE_STATUS_OPTIONS, fmtDateTime, fromDatetimeLocal, toDatetimeLocal } from "@/lib/format";
 import { maintenanceCreateSchema } from "@/validators/schemas";
@@ -59,8 +60,13 @@ export default function MaintenancePage() {
   const [formError, setFormError] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Maintenance | null>(null);
   const [busy, setBusy] = useState(false);
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const [initialAssetIds, setInitialAssetIds] = useState<string[]>([]);
 
-  const { register, handleSubmit, reset, formState: { errors, isSubmitting } } = useForm<MaintenanceFormValues>({ defaultValues: blank(null) });
+  const { register, handleSubmit, reset, watch, setError, clearErrors, formState: { errors, isSubmitting, isDirty } } = useForm<MaintenanceFormValues>({ defaultValues: blank(null) });
+  const startValue = watch("startsAt");
+  const assetsDirty = [...assetIds].sort().join(",") !== [...initialAssetIds].sort().join(",");
+  const dirty = isDirty || assetsDirty;
 
   useEffect(() => {
     const t = window.setTimeout(() => setDebounced(search.trim()), 300);
@@ -79,14 +85,23 @@ export default function MaintenancePage() {
 
   const openForm = (m: Maintenance | null) => {
     setEditing(m);
-    setAssetIds(m ? m.assets.map((a) => a.id) : []);
+    const ids = m ? m.assets.map((a) => a.id) : [];
+    setInitialAssetIds(ids);
+    setAssetIds(ids);
     setFormError(null);
     reset(blank(m));
     setFormOpen(true);
   };
 
+  const requestClose = () => {
+    if (isSubmitting) return;
+    if (dirty) setConfirmDiscard(true);
+    else setFormOpen(false);
+  };
+
   const onSubmit = handleSubmit(async (v) => {
     setFormError(null);
+    clearErrors("root");
     const payload = {
       title: v.title.trim(),
       description: v.description.trim(),
@@ -96,8 +111,20 @@ export default function MaintenancePage() {
       notes: v.notes.trim() || null,
       assetIds,
     };
+    const validation = validateFields(maintenanceCreateSchema, payload, setError, [
+      "title",
+      "description",
+      "startsAt",
+      "endsAt",
+      "ownerId",
+      "notes",
+    ]);
+    if (!validation.valid) {
+      if (validation.formError) setFormError(validation.formError);
+      requestAnimationFrame(() => focusFirstInvalid(document.getElementById("maintenance-form")));
+      return;
+    }
     try {
-      validatePayload(maintenanceCreateSchema, payload);
       const saved = editing
         ? await sendData<Maintenance>("patch", `/maintenance/${editing.id}`, payload)
         : await sendData<Maintenance>("post", "/maintenance", payload);
@@ -107,7 +134,9 @@ export default function MaintenancePage() {
       setFormOpen(false);
       list.reload();
     } catch (err) {
-      setFormError(getErrorMessage(err));
+      const mapped = serverFieldErrors(err, setError, ["title", "description", "startsAt", "endsAt", "ownerId", "notes"]);
+      if (!mapped.firstField) setFormError(getErrorMessage(err));
+      requestAnimationFrame(() => focusFirstInvalid(document.getElementById("maintenance-form")));
     }
   });
 
@@ -238,13 +267,13 @@ export default function MaintenancePage() {
 
       <Modal
         open={formOpen}
-        onClose={() => setFormOpen(false)}
+        onClose={requestClose}
         size="lg"
         title={editing ? "Edit maintenance" : "Schedule maintenance"}
         description="Maintenance windows notify the owner and remind operators 24 hours before the start."
         footer={
           <>
-            <Button variant="outline" onClick={() => setFormOpen(false)} disabled={isSubmitting}>
+            <Button variant="outline" onClick={requestClose} disabled={isSubmitting}>
               Cancel
             </Button>
             <Button type="submit" form="maintenance-form" loading={isSubmitting}>
@@ -255,16 +284,16 @@ export default function MaintenancePage() {
       >
         <form id="maintenance-form" onSubmit={onSubmit} className="grid gap-4 sm:grid-cols-2" noValidate>
           {formError ? (
-            <Alert tone="danger" className="sm:col-span-2">{formError}</Alert>
+            <Alert tone="danger" className="sm:col-span-2" title="Could not save this window">{formError}</Alert>
           ) : null}
           <Field label="Title *" htmlFor="mt-title" error={errors.title?.message} className="sm:col-span-2">
-            <Input id="mt-title" {...register("title", { required: "Title is required" })} placeholder="Database minor version upgrade" />
+            <Input id="mt-title" {...register("title")} maxLength={200} placeholder="Database minor version upgrade" />
           </Field>
-          <Field label="Starts *" htmlFor="mt-start">
-            <Input id="mt-start" type="datetime-local" {...register("startsAt", { required: true })} />
+          <Field label="Starts *" htmlFor="mt-start" error={errors.startsAt?.message} hint="Local time. Reminders go out 24 hours before.">
+            <Input id="mt-start" type="datetime-local" {...register("startsAt")} />
           </Field>
-          <Field label="Ends *" htmlFor="mt-end">
-            <Input id="mt-end" type="datetime-local" {...register("endsAt", { required: true })} />
+          <Field label="Ends *" htmlFor="mt-end" error={errors.endsAt?.message} hint="Must be after the start time.">
+            <Input id="mt-end" type="datetime-local" min={startValue} {...register("endsAt")} />
           </Field>
           <Field label="Responsible user" htmlFor="mt-owner">
             <Select id="mt-owner" {...register("ownerId")}>
@@ -279,14 +308,26 @@ export default function MaintenancePage() {
           <Field label="Affected assets" className="sm:col-span-2">
             <AssetPicker value={assetIds} onChange={setAssetIds} idPrefix="mt-asset" />
           </Field>
-          <Field label="Description *" htmlFor="mt-desc" error={errors.description?.message} className="sm:col-span-2">
-            <Textarea id="mt-desc" rows={3} {...register("description", { required: "Description is required" })} />
+          <Field label="Description *" htmlFor="mt-desc" error={errors.description?.message} hint="What changes, and what operators should watch during the window." className="sm:col-span-2">
+            <Textarea id="mt-desc" rows={3} {...register("description")} />
           </Field>
           <Field label="Notes" htmlFor="mt-notes" className="sm:col-span-2">
             <Textarea id="mt-notes" rows={2} {...register("notes")} />
           </Field>
         </form>
       </Modal>
+
+      <ConfirmDialog
+        open={confirmDiscard}
+        title="Discard changes?"
+        description="This maintenance window has unsaved changes. Closing the dialog will discard them."
+        confirmLabel="Discard changes"
+        onCancel={() => setConfirmDiscard(false)}
+        onConfirm={() => {
+          setConfirmDiscard(false);
+          setFormOpen(false);
+        }}
+      />
 
       <ConfirmDialog
         open={!!deleteTarget}

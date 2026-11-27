@@ -5,10 +5,11 @@ import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { Plus, Search, Siren } from "lucide-react";
 import { AssetPicker } from "@/components/forms/asset-picker";
-import { Alert, Button, Card, DataTable, EmptyState, ErrorState, Field, Input, Modal, PageHeader, Pagination, Segmented, Select, StatCard, StatusBadge, TableSkeleton, Td, Textarea, Th, Toolbar } from "@/components/ui";
+import { Alert, Button, Card, ConfirmDialog, DataTable, EmptyState, ErrorState, Field, Input, Modal, PageHeader, Pagination, Segmented, Select, StatCard, StatusBadge, TableSkeleton, Td, Textarea, Th, Toolbar } from "@/components/ui";
 import { useAuth } from "@/context/auth-context";
 import { useToast } from "@/context/toast-context";
-import { fetchData, fetchList, getErrorMessage, sendData, validatePayload } from "@/lib/client/api";
+import { fetchData, fetchList, getErrorMessage, sendData } from "@/lib/client/api";
+import { focusFirstInvalid, serverFieldErrors, validateFields } from "@/lib/client/form";
 import { useAsync } from "@/lib/client/use-async";
 import { INCIDENT_SEVERITY_OPTIONS, INCIDENT_STATUS_OPTIONS, PRIORITY_OPTIONS, fmtDateTime, fmtRelative } from "@/lib/format";
 import { incidentCreateSchema } from "@/validators/schemas";
@@ -35,8 +36,9 @@ export default function IncidentsPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [assetIds, setAssetIds] = useState<string[]>([]);
   const [formError, setFormError] = useState<string | null>(null);
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
 
-  const { register, handleSubmit, reset, formState: { errors, isSubmitting } } = useForm<IncidentFormValues>({
+  const { register, handleSubmit, reset, setError, clearErrors, formState: { errors, isSubmitting, isDirty } } = useForm<IncidentFormValues>({
     defaultValues: { title: "", description: "", severity: "high", priority: "p2", assigneeId: "" },
   });
 
@@ -56,8 +58,15 @@ export default function IncidentsPage() {
   const stats = useAsync(() => fetchData<{ activeCount: number; total: number; meanTimeToResolveHours: number | null }>("/incidents/stats", { days: 90 }), []);
   const users = useAsync(() => fetchData<UserOption[]>("/users/options"), []);
 
+  const onCloseForm = () => {
+    if (isSubmitting) return;
+    if (isDirty || assetIds.length > 0) setConfirmDiscard(true);
+    else setCreateOpen(false);
+  };
+
   const onCreate = handleSubmit(async (v) => {
     setFormError(null);
+    clearErrors("root");
     const payload = {
       title: v.title.trim(),
       description: v.description.trim(),
@@ -66,8 +75,19 @@ export default function IncidentsPage() {
       assigneeId: v.assigneeId || null,
       assetIds,
     };
+    const validation = validateFields(incidentCreateSchema, payload, setError, [
+      "title",
+      "description",
+      "severity",
+      "priority",
+      "assigneeId",
+    ]);
+    if (!validation.valid) {
+      if (validation.formError) setFormError(validation.formError);
+      requestAnimationFrame(() => focusFirstInvalid(document.getElementById("incident-form")));
+      return;
+    }
     try {
-      validatePayload(incidentCreateSchema, payload);
       const created = await sendData<Incident>("post", "/incidents", payload);
       toast.success(`${created.reference} opened`);
       setCreateOpen(false);
@@ -76,7 +96,9 @@ export default function IncidentsPage() {
       list.reload();
       stats.reload();
     } catch (err) {
-      setFormError(getErrorMessage(err));
+      const mapped = serverFieldErrors(err, setError, ["title", "description", "severity", "priority", "assigneeId"]);
+      if (!mapped.firstField) setFormError(getErrorMessage(err));
+      requestAnimationFrame(() => focusFirstInvalid(document.getElementById("incident-form")));
     }
   });
 
@@ -204,13 +226,13 @@ export default function IncidentsPage() {
 
       <Modal
         open={createOpen}
-        onClose={() => setCreateOpen(false)}
+        onClose={onCloseForm}
         size="lg"
         title="Open incident"
         description="Describe the impact, set severity and priority, and link the affected assets."
         footer={
           <>
-            <Button variant="outline" onClick={() => setCreateOpen(false)} disabled={isSubmitting}>
+            <Button variant="outline" onClick={onCloseForm} disabled={isSubmitting}>
               Cancel
             </Button>
             <Button type="submit" form="incident-form" loading={isSubmitting}>
@@ -221,12 +243,12 @@ export default function IncidentsPage() {
       >
         <form id="incident-form" onSubmit={onCreate} className="grid gap-4 sm:grid-cols-2" noValidate>
           {formError ? (
-            <Alert tone="danger" className="sm:col-span-2">{formError}</Alert>
+            <Alert tone="danger" className="sm:col-span-2" title="Could not open this incident">{formError}</Alert>
           ) : null}
           <Field label="Title *" htmlFor="i-title" error={errors.title?.message} className="sm:col-span-2">
-            <Input id="i-title" {...register("title", { required: "Title is required" })} placeholder="Checkout API returning 503s" />
+            <Input id="i-title" {...register("title")} maxLength={200} placeholder="Checkout API returning 503s" />
           </Field>
-          <Field label="Severity" htmlFor="i-sev">
+          <Field label="Severity" htmlFor="i-sev" error={errors.severity?.message} hint="How bad the impact is.">
             <Select id="i-sev" {...register("severity")}>
               {INCIDENT_SEVERITY_OPTIONS.map((o) => (
                 <option key={o.value} value={o.value}>
@@ -235,7 +257,7 @@ export default function IncidentsPage() {
               ))}
             </Select>
           </Field>
-          <Field label="Priority" htmlFor="i-pri">
+          <Field label="Priority" htmlFor="i-pri" error={errors.priority?.message} hint="Sets the response SLA for this incident.">
             <Select id="i-pri" {...register("priority")}>
               {PRIORITY_OPTIONS.map((o) => (
                 <option key={o.value} value={o.value}>
@@ -244,7 +266,7 @@ export default function IncidentsPage() {
               ))}
             </Select>
           </Field>
-          <Field label="Assignee" htmlFor="i-assignee">
+          <Field label="Assignee" htmlFor="i-assignee" error={errors.assigneeId?.message}>
             <Select id="i-assignee" {...register("assigneeId")}>
               <option value="">Unassigned</option>
               {(users.data ?? []).map((u) => (
@@ -257,11 +279,25 @@ export default function IncidentsPage() {
           <Field label="Affected assets" className="sm:col-span-2">
             <AssetPicker value={assetIds} onChange={setAssetIds} idPrefix="inc-asset" />
           </Field>
-          <Field label="Description *" htmlFor="i-desc" error={errors.description?.message} className="sm:col-span-2">
-            <Textarea id="i-desc" rows={4} {...register("description", { required: "Description is required" })} placeholder="Symptoms, customer impact and what has been tried so far." />
+          <Field label="Description *" htmlFor="i-desc" error={errors.description?.message} hint="Symptoms, customer impact and what has been tried so far." className="sm:col-span-2">
+            <Textarea id="i-desc" rows={4} {...register("description")} placeholder="Symptoms, customer impact and what has been tried so far." />
           </Field>
         </form>
       </Modal>
+
+      <ConfirmDialog
+        open={confirmDiscard}
+        title="Discard this incident?"
+        description="The draft incident has unsaved details. Closing the dialog will discard them."
+        confirmLabel="Discard draft"
+        onCancel={() => setConfirmDiscard(false)}
+        onConfirm={() => {
+          setConfirmDiscard(false);
+          setCreateOpen(false);
+          reset();
+          setAssetIds([]);
+        }}
+      />
     </div>
   );
 }

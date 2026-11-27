@@ -3,12 +3,13 @@
 import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { UserCircle, KeyRound, Palette } from "lucide-react";
-import { Alert, Button, Card, ConfirmDialog, EmptyState, ErrorState, Field, Input, PageHeader, Segmented, Skeleton, StatusBadge } from "@/components/ui";
+import { Alert, Button, Card, ConfirmDialog, EmptyState, ErrorState, Field, Input, PageHeader, PasswordInput, PasswordRequirements, Segmented, Skeleton, StatusBadge } from "@/components/ui";
 import { useAuth } from "@/context/auth-context";
 import { useTheme } from "@/context/theme-context";
 import { useToast } from "@/context/toast-context";
 import { fetchData, getErrorMessage, sendData, validatePayload } from "@/lib/client/api";
 import { useAsync } from "@/lib/client/use-async";
+import { focusFirstInvalid, validateFields } from "@/lib/client/form";
 import { fmtDateTime, fmtRelative } from "@/lib/format";
 import { changePasswordSchema, updateProfileSchema } from "@/validators/schemas";
 import type { AccountSession, SessionPayload } from "@/types/api";
@@ -51,11 +52,20 @@ export default function SettingsPage() {
     setPasswordError(null);
     if (v.newPassword !== v.confirm) {
       password.setError("confirm", { message: "Passwords do not match" });
+      requestAnimationFrame(() => focusFirstInvalid(document.getElementById("settings-password-form")));
       return;
     }
     const payload = { currentPassword: v.currentPassword, newPassword: v.newPassword };
     try {
-      validatePayload(changePasswordSchema, payload);
+      const validation = validateFields(changePasswordSchema, payload, password.setError, [
+        "currentPassword",
+        "newPassword",
+      ]);
+      if (!validation.valid) {
+        if (validation.formError) setPasswordError(validation.formError);
+        requestAnimationFrame(() => focusFirstInvalid(document.getElementById("settings-password-form")));
+        return;
+      }
       const session = await sendData<SessionPayload>("post", "/users/me/password", payload);
       applySession(session);
       resetPassword({ currentPassword: "", newPassword: "", confirm: "" });
@@ -126,16 +136,22 @@ export default function SettingsPage() {
           <h2 className="flex items-center gap-2 text-sm font-semibold text-fg">
             <KeyRound className="size-4 text-accent" aria-hidden="true" /> Change password
           </h2>
-          <form onSubmit={changePw} className="mt-4 space-y-4" noValidate>
+          <form id="settings-password-form" onSubmit={changePw} className="mt-4 space-y-4" noValidate>
             {passwordError ? <Alert tone="danger">{passwordError}</Alert> : null}
-            <Field label="Current password" htmlFor="pw-current" error={password.formState.errors.currentPassword?.message}>
-              <Input id="pw-current" type="password" autoComplete="current-password" {...password.register("currentPassword", { required: "Enter your current password" })} />
+            <Field label="Current password" htmlFor="pw-current" error={password.formState.errors.currentPassword?.message} required>
+              <PasswordInput id="pw-current" autoComplete="current-password" {...password.register("currentPassword")} />
             </Field>
-            <Field label="New password" htmlFor="pw-new" hint="At least 12 characters with upper, lower case and a number." error={password.formState.errors.newPassword?.message}>
-              <Input id="pw-new" type="password" autoComplete="new-password" {...password.register("newPassword", { required: "Enter a new password" })} />
+            <Field
+              label="New password"
+              htmlFor="pw-new"
+              error={password.formState.errors.newPassword?.message}
+              required
+            >
+              <PasswordInput id="pw-new" autoComplete="new-password" {...password.register("newPassword")} />
+              <PasswordRequirements value={password.watch("newPassword")} />
             </Field>
-            <Field label="Confirm new password" htmlFor="pw-confirm" error={password.formState.errors.confirm?.message}>
-              <Input id="pw-confirm" type="password" autoComplete="new-password" {...password.register("confirm", { required: "Confirm the new password" })} />
+            <Field label="Confirm new password" htmlFor="pw-confirm" error={password.formState.errors.confirm?.message} required>
+              <PasswordInput id="pw-confirm" autoComplete="new-password" {...password.register("confirm")} />
             </Field>
             <div className="flex justify-end">
               <Button type="submit" loading={password.formState.isSubmitting}>

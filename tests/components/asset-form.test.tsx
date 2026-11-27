@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/context/toast-context", () => ({
@@ -56,5 +57,38 @@ describe("AssetFormModal", () => {
     const dialog = screen.getByRole("dialog", { name: "Edit asset" });
     expect(within(dialog).getByLabelText("Asset name *")).toHaveValue("prod-db-01");
     expect(within(dialog).getByRole("button", { name: "Save changes" })).toBeInTheDocument();
+  });
+
+  it("validates per field with the shared schema before calling the API", async () => {
+    const user = userEvent.setup();
+    render(<AssetFormModal open onClose={() => undefined} onSaved={() => undefined} owners={[]} />);
+
+    const dialog = screen.getByRole("dialog", { name: "Register asset" });
+    const name = within(dialog).getByLabelText("Asset name *");
+    await user.type(name, "bad host!");
+    await user.clear(name);
+    await user.type(within(dialog).getByLabelText("IP address"), "999.1.1.1");
+    await user.click(within(dialog).getByRole("button", { name: "Register asset" }));
+
+    expect(await within(dialog).findByText("Required")).toBeInTheDocument();
+    expect(await within(dialog).findByText("Enter a valid IPv4 or IPv6 address")).toBeInTheDocument();
+    expect(name).toHaveAttribute("aria-invalid", "true");
+    expect(name).toBe(document.activeElement);
+  });
+
+  it("asks before discarding an edited asset", async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    render(<AssetFormModal open onClose={onClose} onSaved={() => undefined} owners={[]} />);
+
+    const dialog = screen.getByRole("dialog", { name: "Register asset" });
+    await user.type(within(dialog).getByLabelText("Asset name *"), "prod-cache-01");
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+    const confirm = await screen.findByRole("dialog", { name: "Discard changes?" });
+    expect(onClose).not.toHaveBeenCalled();
+
+    await user.click(within(confirm).getByRole("button", { name: "Discard changes" }));
+    expect(onClose).toHaveBeenCalled();
   });
 });

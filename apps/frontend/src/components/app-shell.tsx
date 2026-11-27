@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import {
   Activity,
   Bell,
@@ -16,7 +16,6 @@ import {
   Moon,
   PanelLeftClose,
   PanelLeftOpen,
-  Search,
   Server,
   Settings,
   ShieldAlert,
@@ -31,6 +30,7 @@ import { useAuth } from "@/context/auth-context";
 import { useTheme } from "@/context/theme-context";
 import { fetchList } from "@/lib/client/api";
 import { cn, IconButton, StatusDot } from "@/components/ui";
+import { GlobalSearch } from "@/components/global-search";
 
 interface NavItem {
   href: string;
@@ -100,9 +100,7 @@ const SIDEBAR_STORAGE_KEY = "infrapilot-sidebar-collapsed";
 
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
-  const router = useRouter();
   const { user, signOut } = useAuth();
-  const [search, setSearch] = useState("");
   const { theme, toggle } = useTheme();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
@@ -328,6 +326,12 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   return (
     <div className="flex min-h-screen">
+      <a
+        href="#main"
+        className="sr-only rounded-md bg-surface px-3 py-2 text-sm font-medium text-fg shadow-raised focus:not-sr-only focus:fixed focus:left-3 focus:top-3 focus:z-[60] focus:outline-none focus:ring-2 focus:ring-accent-ring"
+      >
+        Skip to main content
+      </a>
       <aside
         aria-label="Sidebar"
         className={cn(
@@ -405,25 +409,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             </ol>
           </nav>
 
-          <form
-            role="search"
-            className="relative hidden shrink-0 md:block"
-            onSubmit={(event) => {
-              event.preventDefault();
-              const term = search.trim();
-              if (term.length >= 2) router.push(`/search?q=${encodeURIComponent(term)}`);
-            }}
-          >
-            <Search className="pointer-events-none absolute left-2.5 top-2 size-3.5 text-muted" aria-hidden="true" />
-            <input
-              type="search"
-              aria-label="Global search"
-              placeholder="Search workspace…"
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              className="h-8 w-44 rounded-md border border-line bg-surface-2/60 pl-8 pr-2 text-xs text-fg placeholder:text-muted focus-visible:border-accent focus-visible:bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-ring lg:w-60"
-            />
-          </form>
+          <GlobalSearch />
 
           <div className="flex shrink-0 items-center gap-1">
             <Link

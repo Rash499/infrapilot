@@ -2,10 +2,13 @@
 
 import {
   Children,
+  createContext,
   forwardRef,
+  useContext,
   useEffect,
   useId,
   useRef,
+  useState,
   type ButtonHTMLAttributes,
   type InputHTMLAttributes,
   type ReactNode,
@@ -16,8 +19,15 @@ import {
 } from "react";
 import {
   AlertTriangle,
+  ArrowDown,
+  CheckCircle2,
+  Info,
+  ArrowUp,
   ChevronLeft,
   ChevronRight,
+  ChevronsUpDown,
+  Eye,
+  EyeOff,
   Inbox,
   Loader2,
   Search,
@@ -25,6 +35,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { humanize } from "@/lib/format";
+import { passwordChecks } from "@/lib/client/form";
 import type { Pagination as PaginationMeta } from "@/types/api";
 
 export function cn(...classes: Array<string | false | null | undefined>): string {
@@ -277,31 +288,142 @@ const inputBase =
   "placeholder:text-faint hover:border-line-strong " +
   "focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent-ring/25 " +
   "disabled:cursor-not-allowed disabled:bg-surface-2 disabled:opacity-70 " +
-  "aria-[invalid=true]:border-rose-500 aria-[invalid=true]:focus:ring-rose-500/25";
+  "aria-[invalid=true]:border-rose-500 aria-[invalid=true]:ring-rose-500/25";
+
+/**
+ * Field context: lets a `Field` wrap any control and still get correct `id`, `aria-invalid`,
+ * `aria-describedby` wiring without every call site repeating the ids. Controls used outside a
+ * `Field` behave exactly as before.
+ */
+interface FieldContextValue {
+  controlId: string;
+  errorId?: string;
+  hintId?: string;
+  invalid: boolean;
+  required: boolean;
+}
+
+const FieldContext = createContext<FieldContextValue | null>(null);
+
+function useFieldContext(): FieldContextValue | null {
+  return useContext(FieldContext);
+}
+
+function mergeAria(
+  ctx: FieldContextValue | null,
+  describedBy: string | undefined,
+  invalid: InputHTMLAttributes<HTMLElement>["aria-invalid"],
+) {
+  if (!ctx) return { "aria-invalid": invalid, "aria-describedby": describedBy, "aria-required": undefined };
+  // Hint and error are both rendered by Field, so both are referenced: whichever one is present
+  // stays announced, and the id never points at a node that is missing.
+  const ids = [describedBy, ctx.hintId, ctx.invalid ? ctx.errorId : undefined].filter(Boolean).join(" ");
+  return {
+    "aria-invalid": invalid ?? (ctx.invalid ? true : undefined),
+    "aria-describedby": ids || undefined,
+    "aria-required": ctx.required ? true : undefined,
+  };
+}
 
 export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement>>(function Input(
-  { className, ...props },
+  { className, id, "aria-describedby": describedBy, "aria-invalid": invalid, ...props },
   ref,
 ) {
-  return <input ref={ref} className={cn(inputBase, className)} {...props} />;
+  const ctx = useFieldContext();
+  return (
+    <input
+      ref={ref}
+      id={id ?? ctx?.controlId}
+      {...mergeAria(ctx, describedBy, invalid)}
+      className={cn(inputBase, className)}
+      {...props}
+    />
+  );
 });
 
 export const Select = forwardRef<HTMLSelectElement, SelectHTMLAttributes<HTMLSelectElement>>(function Select(
-  { className, children, ...props },
+  { className, children, id, "aria-describedby": describedBy, "aria-invalid": invalid, ...props },
   ref,
 ) {
+  const ctx = useFieldContext();
   return (
-    <select ref={ref} className={cn(inputBase, "cursor-pointer pr-8", className)} {...props}>
+    <select
+      ref={ref}
+      id={id ?? ctx?.controlId}
+      {...mergeAria(ctx, describedBy, invalid)}
+      className={cn(inputBase, "cursor-pointer pr-8", className)}
+      {...props}
+    >
       {children}
     </select>
   );
 });
 
 export const Textarea = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<HTMLTextAreaElement>>(
-  function Textarea({ className, ...props }, ref) {
-    return <textarea ref={ref} className={cn(inputBase, "h-auto min-h-24 py-2 leading-relaxed", className)} {...props} />;
+  function Textarea({ className, id, "aria-describedby": describedBy, "aria-invalid": invalid, ...props }, ref) {
+    const ctx = useFieldContext();
+    return (
+      <textarea
+        ref={ref}
+        id={id ?? ctx?.controlId}
+        {...mergeAria(ctx, describedBy, invalid)}
+        className={cn(inputBase, "h-auto min-h-24 py-2 leading-relaxed", className)}
+        {...props}
+      />
+    );
   },
 );
+
+/** Password input with an accessible show/hide toggle. */
+export function PasswordInput({ className, ...props }: InputHTMLAttributes<HTMLInputElement>) {
+  const [visible, setVisible] = useState(false);
+  const ctx = useFieldContext();
+  return (
+    <div className="relative">
+      <Input type={visible ? "text" : "password"} className={cn("pr-10", className)} {...props} />
+      <button
+        type="button"
+        onClick={() => setVisible((value) => !value)}
+        // The name deliberately avoids the word "password": page-level "Password" labels must stay
+        // uniquely identifiable for assistive tech and for label-based automation.
+        aria-label={visible ? "Hide characters" : "Show characters"}
+        aria-pressed={visible}
+        aria-controls={props.id ?? ctx?.controlId}
+        title={visible ? "Hide characters" : "Show characters"}
+        className="absolute right-1 top-1/2 grid size-7 -translate-y-1/2 place-items-center rounded text-muted transition-colors hover:bg-surface-2 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-ring"
+      >
+        {visible ? <EyeOff className="size-4" aria-hidden="true" /> : <Eye className="size-4" aria-hidden="true" />}
+      </button>
+    </div>
+  );
+}
+
+/**
+ * Live password requirements. Each rule is text + state (never colour alone) and the whole list is
+ * announced politely as the user types, replacing a single error that only appears on submit.
+ */
+export function PasswordRequirements({ value, id }: { value: string; id?: string }) {
+  const checks = passwordChecks(value);
+  return (
+    <ul id={id} className="mt-1.5 grid gap-1 text-xs sm:grid-cols-2" aria-live="polite">
+      {checks.map((check) => (
+        <li
+          key={check.id}
+          className={cn(
+            "flex items-center gap-1.5",
+            check.met ? "text-emerald-700 dark:text-emerald-400" : "text-muted",
+          )}
+        >
+          <span aria-hidden="true" className={cn("grid size-3.5 shrink-0 place-items-center rounded-full border text-[9px]", check.met ? "border-emerald-500/40 bg-emerald-500/15" : "border-line-strong")}>
+            {check.met ? "✓" : ""}
+          </span>
+          {check.label}
+          <span className="sr-only">{check.met ? "(met)" : "(not met)"}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
 
 export function Field({
   label,
@@ -320,24 +442,81 @@ export function Field({
   children: ReactNode;
   className?: string;
 }) {
+  const autoId = useId();
+  const controlId = htmlFor ?? `field-${autoId}`;
+  const errorId = `${controlId}-error`;
+  const hintId = `${controlId}-hint`;
+  // Labels keep their historic "*" suffix (end-to-end and unit tests address fields by that name);
+  // `required` only adds the marker when the label does not already carry one.
+  const hasMarker = /\*\s*$/.test(label);
+  const isRequired = required ?? hasMarker;
+  const text = hasMarker ? label.replace(/\s*\*\s*$/, "") : label;
+  const context: FieldContextValue = {
+    controlId,
+    errorId,
+    hintId,
+    invalid: Boolean(error),
+    required: isRequired,
+  };
+
   return (
     <div className={cn("space-y-1.5", className)}>
-      <label htmlFor={htmlFor} className="flex items-center gap-1 text-xs font-medium text-fg-secondary">
-        {label}
-        {required ? (
-          <span className="text-rose-500" aria-hidden="true">
-            *
-          </span>
+      <label htmlFor={controlId} className="flex items-center gap-1 text-xs font-medium text-fg-secondary">
+        {text}
+        {isRequired ? (
+          <>
+            {" "}
+            <span className="text-rose-500">*</span>
+          </>
         ) : null}
       </label>
-      {children}
-      {error ? (
-        <p role="alert" className="flex items-start gap-1 text-xs font-medium text-rose-500">
-          {error}
+      <FieldContext.Provider value={context}>{children}</FieldContext.Provider>
+      {hint ? (
+        <p id={hintId} className="text-xs leading-relaxed text-muted">
+          {hint}
         </p>
-      ) : hint ? (
-        <p className="text-xs leading-relaxed text-muted">{hint}</p>
       ) : null}
+      {error ? (
+        <p id={errorId} role="alert" className="flex items-start gap-1 text-xs font-medium text-rose-600 dark:text-rose-400">
+          <AlertTriangle className="mt-px size-3.5 shrink-0" aria-hidden="true" />
+          <span>{error}</span>
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+/** Native checkbox expressed as a switch. Keeps form registration and keyboard behaviour intact. */
+export function Switch({
+  id,
+  label,
+  description,
+  className,
+  disabled,
+  ...props
+}: InputHTMLAttributes<HTMLInputElement> & { id: string; label: string; description?: string }) {
+  return (
+    <div className={cn("flex items-start gap-3", className)}>
+      <span className="relative mt-0.5 inline-flex shrink-0">
+        <input
+          id={id}
+          type="checkbox"
+          role="switch"
+          disabled={disabled}
+          className="peer size-9 cursor-pointer appearance-none rounded-full border border-line bg-surface-3 transition-colors checked:border-accent checked:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface disabled:cursor-not-allowed disabled:opacity-50"
+          {...props}
+        />
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute left-0.5 top-1/2 size-3.5 -translate-y-1/2 rounded-full bg-white shadow-sm transition-transform duration-150 peer-checked:translate-x-[18px]"
+        />
+      </span>
+      <span className="min-w-0">
+        <label htmlFor={id} className="block cursor-pointer text-sm text-fg">
+          {label}
+        </label>
+        {description ? <p className="mt-0.5 text-xs leading-relaxed text-muted">{description}</p> : null}
+      </span>
     </div>
   );
 }
@@ -390,14 +569,17 @@ export function SearchInput({
 }
 
 export const Checkbox = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement> & { label: string; id: string }>(
-  function Checkbox({ id, label, ...props }, ref) {
+  function Checkbox({ id, label, className, ...props }, ref) {
     return (
-      <label htmlFor={id} className="inline-flex cursor-pointer items-center gap-2 text-sm text-fg">
+      <label
+        htmlFor={id}
+        className={cn("inline-flex cursor-pointer items-center gap-2 text-sm text-fg", className)}
+      >
         <input
           ref={ref}
           id={id}
           type="checkbox"
-          className="size-4 shrink-0 cursor-pointer rounded border-line text-accent accent-[var(--accent)]"
+          className="size-4 shrink-0 cursor-pointer rounded border-line text-accent accent-[var(--accent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface"
           {...props}
         />
         {label}
@@ -434,18 +616,29 @@ export function Modal({
   const descriptionId = useId();
   const panelRef = useRef<HTMLDivElement>(null);
   const restoreFocusRef = useRef<HTMLElement | null>(null);
+  // Callers commonly pass an inline closure; keeping it in a ref means the focus/scroll-lock setup
+  // runs only when the dialog opens instead of on every parent render (which stole focus mid-typing).
+  const onCloseRef = useRef(onClose);
+
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  });
 
   useEffect(() => {
     if (!open) return;
     restoreFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const panel = panelRef.current;
-    const firstField = panel?.querySelector<HTMLElement>(FOCUSABLE);
+    // Prefer the first form control so keyboard users start in the form, not on "Close".
+    const firstControl = panel?.querySelector<HTMLElement>(
+      'input:not([type="hidden"]):not([disabled]), select:not([disabled]), textarea:not([disabled])',
+    );
+    const firstField = firstControl ?? panel?.querySelector<HTMLElement>(FOCUSABLE);
     (firstField ?? panel)?.focus();
 
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.stopPropagation();
-        onClose();
+        onCloseRef.current();
         return;
       }
       if (event.key !== "Tab" || !panel) return;
@@ -471,7 +664,7 @@ export function Modal({
       document.body.style.overflow = previous;
       restoreFocusRef.current?.focus();
     };
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open) return null;
   const width = size === "lg" ? "sm:max-w-3xl" : size === "sm" ? "sm:max-w-md" : "sm:max-w-xl";
@@ -642,12 +835,13 @@ export function Alert({
     danger: "text-rose-600 dark:text-rose-400",
     info: "text-accent",
   };
+  const Icon = tone === "success" ? CheckCircle2 : tone === "warning" || tone === "danger" ? AlertTriangle : Info;
   return (
     <div
       className={cn("flex w-full items-start gap-2.5 rounded-lg border px-3 py-2.5 text-sm", `tone-${tone}`, className)}
       role={tone === "danger" ? "alert" : "status"}
     >
-      <AlertTriangle className={cn("mt-0.5 size-4 shrink-0", iconTone[tone])} aria-hidden="true" />
+      <Icon className={cn("mt-0.5 size-4 shrink-0", iconTone[tone])} aria-hidden="true" />
       <span className="min-w-0">
         {title ? <span className="block font-semibold">{title}</span> : null}
         <span className="block leading-relaxed">{children}</span>
@@ -885,6 +1079,51 @@ export function Th({ children, className, ...props }: ThHTMLAttributes<HTMLTable
     >
       {children}
     </th>
+  );
+}
+
+/**
+ * Sortable column header. Exposes `aria-sort` on the cell and a real button inside it, so the
+ * sort affordance is keyboard reachable and announced (the previous plain clickable `th` was not).
+ */
+export function SortHeader<T extends string>({
+  column,
+  activeColumn,
+  direction,
+  onSort,
+  children,
+  className,
+}: {
+  column: T;
+  activeColumn: string;
+  direction: "asc" | "desc";
+  onSort: (column: T) => void;
+  children: ReactNode;
+  className?: string;
+}) {
+  const active = activeColumn === column;
+  const ariaSort = active ? (direction === "asc" ? "ascending" : "descending") : "none";
+  const Icon = !active ? ChevronsUpDown : direction === "asc" ? ArrowUp : ArrowDown;
+  return (
+    <Th aria-sort={ariaSort} className={cn("p-0", className)}>
+      <button
+        type="button"
+        onClick={() => onSort(column)}
+        className="flex h-full w-full items-center gap-1 px-4 py-2.5 text-left uppercase tracking-[0.06em] transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-ring"
+      >
+        {children}
+        <Icon className={cn("size-3", active ? "text-fg" : "text-faint")} aria-hidden="true" />
+      </button>
+    </Th>
+  );
+}
+
+/** Small keyboard hint, e.g. the ⌘K shortcut on the global search field. */
+export function Kbd({ children }: { children: ReactNode }) {
+  return (
+    <kbd className="rounded border border-line bg-surface px-1 py-0.5 font-sans text-[10px] font-medium leading-none text-muted">
+      {children}
+    </kbd>
   );
 }
 

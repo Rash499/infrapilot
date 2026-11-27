@@ -76,6 +76,30 @@ test.describe("InfraPilot end-to-end", () => {
     await expect(page.getByText("Finding recorded")).toBeVisible();
   });
 
+  test("validates the asset dialog in place and guards unsaved edits", async ({ page }) => {
+    await signIn(page);
+    await page.goto("/assets");
+    await page.getByRole("button", { name: "Register asset" }).first().click();
+
+    const dialog = page.getByRole("dialog", { name: "Register asset" });
+    await dialog.getByRole("button", { name: "Register asset" }).click();
+
+    // The shared schema rejects the empty name; the field says so and takes focus.
+    const name = dialog.getByLabel("Asset name *");
+    await expect(dialog.getByRole("alert").first()).toContainText("Required");
+    await expect(name).toHaveAttribute("aria-invalid", "true");
+    await expect(name).toBeFocused();
+
+    await name.fill(`e2e-guard-${stamp}`);
+    await dialog.getByRole("button", { name: "Cancel" }).click();
+
+    const confirm = page.getByRole("dialog", { name: "Discard changes?" });
+    await expect(confirm).toBeVisible();
+    await confirm.getByRole("button", { name: "Discard changes" }).click();
+    await expect(dialog).toBeHidden();
+    await expect(page.getByRole("link", { name: `e2e-guard-${stamp}` })).toHaveCount(0);
+  });
+
   test("schedules maintenance and shows it in the list", async ({ page }) => {
     await signIn(page);
     await page.goto("/maintenance");

@@ -2,14 +2,15 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState, type ChangeEvent } from "react";
-import { Archive, ArchiveRestore, Download, Pencil, Plus, Search, Upload } from "lucide-react";
+import { Archive, ArchiveRestore, Download, FilterX, Pencil, Plus, Search, Upload } from "lucide-react";
 import { AssetFormModal } from "@/components/forms/asset-form";
-import { Alert, Button, Card, ConfirmDialog, DataTable, EmptyState, ErrorState, Input, Modal, PageHeader, Pagination, Segmented, Select, StatusBadge, TableSkeleton, Td, Th, Toolbar } from "@/components/ui";
+import { Alert, Button, Card, ConfirmDialog, DataTable, EmptyState, ErrorState, Input, Modal, PageHeader, Pagination, Segmented, Select, SortHeader, StatusBadge, TableSkeleton, Td, Th, Toolbar } from "@/components/ui";
 import { useAuth } from "@/context/auth-context";
 import { useToast } from "@/context/toast-context";
 import { fetchData, fetchList, getErrorMessage, sendData } from "@/lib/client/api";
 import { useAsync } from "@/lib/client/use-async";
 import { assetsToCsv, MAX_ASSET_IMPORT_ROWS, parseAssetsCsv, type AssetCsvError, type AssetCsvImport } from "@/lib/assets-csv";
+import { useUrlFilters } from "@/lib/client/use-url-filters";
 import { ASSET_STATUS_OPTIONS, ASSET_TYPE_OPTIONS, ENVIRONMENT_OPTIONS, fmtRelative, humanize } from "@/lib/format";
 import type { Asset, UserOption } from "@/types/api";
 
@@ -55,6 +56,32 @@ export default function AssetsPage() {
   useEffect(() => {
     setPage(1);
   }, [debounced, assetType, environment, status, archived, sort, order]);
+
+  // Structured filters are shareable: reloading or navigating back restores the same view. The
+  // free-text search is intentionally transient — writing it from a debounce would race with a row
+  // click that navigates to an asset while the timer fires.
+  useUrlFilters(
+    { type: assetType, env: environment, state: status, scope: archived, sort, order },
+    { type: "", env: "", state: "", scope: "false", sort: "name", order: "asc" },
+    (patch) => {
+      if (patch.type !== undefined) setAssetType(patch.type);
+      if (patch.env !== undefined) setEnvironment(patch.env);
+      if (patch.state !== undefined) setStatus(patch.state);
+      if (patch.scope !== undefined) setArchived(patch.scope === "true" ? "true" : "false");
+      if (patch.sort !== undefined) setSort(patch.sort);
+      if (patch.order !== undefined) setOrder(patch.order === "desc" ? "desc" : "asc");
+    },
+  );
+
+  const filtersActive = Boolean(debounced || assetType || environment || status) || archived !== "false";
+
+  const clearFilters = () => {
+    setSearch("");
+    setAssetType("");
+    setEnvironment("");
+    setStatus("");
+    setArchived("false");
+  };
 
   const list = useAsync(
     () => fetchList<Asset>("/assets", { page, pageSize: 15, search: debounced, assetType, environment, status, archived, sort, order }),
@@ -164,8 +191,6 @@ export default function AssetsPage() {
     }
   };
 
-  const sortLabel = (column: string) => (sort === column ? (order === "asc" ? " ▲" : " ▼") : "");
-
   return (
     <div className="space-y-6">
       <PageHeader
@@ -252,15 +277,23 @@ export default function AssetsPage() {
             ))}
           </Select>
         </div>
-        <Segmented
-          label="Inventory scope"
-          value={archived}
-          onChange={setArchived}
-          options={[
-            { value: "false", label: "Active" },
-            { value: "true", label: "Archived" },
-          ]}
-        />
+        <div className="flex flex-wrap items-center gap-2">
+          <Segmented
+            label="Inventory scope"
+            value={archived}
+            onChange={setArchived}
+            options={[
+              { value: "false", label: "Active" },
+              { value: "true", label: "Archived" },
+            ]}
+          />
+          {filtersActive ? (
+            <Button variant="ghost" size="sm" onClick={clearFilters}>
+              <FilterX className="size-3.5" aria-hidden="true" />
+              Clear filters
+            </Button>
+          ) : null}
+        </div>
       </Toolbar>
 
       <Card className="overflow-hidden">
@@ -272,10 +305,15 @@ export default function AssetsPage() {
             title="No assets match these filters"
             description={can("write") ? "Register your first asset to start tracking infrastructure." : "Ask an operator to register infrastructure assets."}
             action={
-              can("write") && !debounced && !assetType && !environment && !status && archived === "false" ? (
+              can("write") && !filtersActive ? (
                 <Button onClick={() => setFormOpen(true)}>
                   <Plus className="size-4" aria-hidden="true" />
                   Register asset
+                </Button>
+              ) : filtersActive ? (
+                <Button variant="outline" onClick={clearFilters}>
+                  <FilterX className="size-4" aria-hidden="true" />
+                  Clear filters
                 </Button>
               ) : null
             }
@@ -286,29 +324,21 @@ export default function AssetsPage() {
             <DataTable minWidth={960}>
               <thead>
                 <tr>
-                  <Th>
-                    <button type="button" onClick={() => toggleSort("name")} className="uppercase">
-                      Name{sortLabel("name")}
-                    </button>
-                  </Th>
+                  <SortHeader column="name" activeColumn={sort} direction={order} onSort={toggleSort}>
+                    Name
+                  </SortHeader>
                   <Th>Type</Th>
                   <Th>Host / IP</Th>
-                  <Th>
-                    <button type="button" onClick={() => toggleSort("environment")} className="uppercase">
-                      Environment{sortLabel("environment")}
-                    </button>
-                  </Th>
+                  <SortHeader column="environment" activeColumn={sort} direction={order} onSort={toggleSort}>
+                    Environment
+                  </SortHeader>
                   <Th>Owner</Th>
-                  <Th>
-                    <button type="button" onClick={() => toggleSort("status")} className="uppercase">
-                      Status{sortLabel("status")}
-                    </button>
-                  </Th>
-                  <Th>
-                    <button type="button" onClick={() => toggleSort("updatedAt")} className="uppercase">
-                      Updated{sortLabel("updatedAt")}
-                    </button>
-                  </Th>
+                  <SortHeader column="status" activeColumn={sort} direction={order} onSort={toggleSort}>
+                    Status
+                  </SortHeader>
+                  <SortHeader column="updatedAt" activeColumn={sort} direction={order} onSort={toggleSort}>
+                    Updated
+                  </SortHeader>
                   <Th className="text-right">Actions</Th>
                 </tr>
               </thead>

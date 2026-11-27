@@ -47,4 +47,50 @@ describe("Add monitoring check dialog", () => {
     expect(within(dialog).getByRole("group", { name: "Target" })).toBeInTheDocument();
     expect(within(dialog).getByRole("group", { name: "Schedule and thresholds" })).toBeInTheDocument();
   });
+
+  it("swaps HTTP fields for TCP fields without leaving stale values", async () => {
+    const user = userEvent.setup();
+    render(<MonitoringPage />);
+
+    await user.click(screen.getByRole("button", { name: "Add check" }));
+    const dialog = screen.getByRole("dialog", { name: "Add monitoring check" });
+
+    expect(within(dialog).getByLabelText("URL *")).toBeInTheDocument();
+    expect(within(dialog).queryByLabelText("Host *")).not.toBeInTheDocument();
+
+    await user.selectOptions(within(dialog).getByLabelText("Check type *"), "tcp");
+    expect(within(dialog).queryByLabelText("URL *")).not.toBeInTheDocument();
+    expect(within(dialog).getByLabelText("Host *")).toBeInTheDocument();
+    expect(within(dialog).getByLabelText("Port *")).toBeInTheDocument();
+
+    await user.selectOptions(within(dialog).getByLabelText("Check type *"), "http");
+    expect(within(dialog).getByLabelText("URL *")).toBeInTheDocument();
+    expect(within(dialog).queryByLabelText("Port *")).not.toBeInTheDocument();
+  });
+
+  it("validates against the shared schema and focuses the first invalid field", async () => {
+    const user = userEvent.setup();
+    render(<MonitoringPage />);
+
+    await user.click(screen.getByRole("button", { name: "Add check" }));
+    const dialog = screen.getByRole("dialog", { name: "Add monitoring check" });
+    await user.click(within(dialog).getByRole("button", { name: "Create check" }));
+
+    const nameField = within(dialog).getByLabelText("Name *");
+    expect(await within(dialog).findByText("Required")).toBeInTheDocument();
+    expect(nameField).toHaveAttribute("aria-invalid", "true");
+    expect(nameField).toBe(document.activeElement);
+    expect(dialog).toBeInTheDocument();
+  });
+
+  it("exposes boolean options as switches with descriptions", async () => {
+    const user = userEvent.setup();
+    render(<MonitoringPage />);
+
+    await user.click(screen.getByRole("button", { name: "Add check" }));
+    const dialog = screen.getByRole("dialog", { name: "Add monitoring check" });
+    expect(within(dialog).getByRole("switch", { name: "Check enabled" })).toBeChecked();
+    expect(within(dialog).getByRole("switch", { name: /Open incidents automatically/ })).toBeInTheDocument();
+    expect(within(dialog).getByRole("switch", { name: /Authorise private network targets/ })).toBeInTheDocument();
+  });
 });
