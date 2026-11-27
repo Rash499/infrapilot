@@ -48,12 +48,14 @@ The following screenshots show the InfraPilot application interface.
 | --- | --- |
 | **Dashboard** | Review an operational overview, including asset health, uptime, monitoring activity, incidents, security findings, and upcoming maintenance. |
 | **Assets** | Maintain an inventory of infrastructure assets and review their current status. |
-| **Monitoring** | Manage monitored services and review availability checks, response times, and check history. |
-| **Incidents** | Review and manage operational incidents through their resolution workflow. |
+| **Monitoring** | Manage monitored services with per-target failure/recovery/latency thresholds, uptime and p95/p99 analytics, and check history. |
+| **Alerts** | Alert console with deduplication, acknowledgement, suppression and resolution; every transition keeps an actor-stamped history. |
+| **Incidents** | Manage incidents with priority-based SLA targets, MTTA/MTTR metrics, acknowledgement, and a correlated timeline (monitoring, changes, findings). |
 | **Maintenance** | Plan and track scheduled maintenance activities. |
 | **Change management** | Coordinate infrastructure change requests and their approval workflow. |
-| **Security findings** | Review security issues, severity, and remediation progress. |
+| **Security findings** | Vulnerability register with CVSS, component versions, remediation deadlines and safe **Trivy JSON report import**. |
 | **Users & access** | Administer workspace users and access. |
+| **Search** | Global search across assets, checks, alerts, incidents, findings, maintenance, changes and (admin only) users. |
 | **Notifications** | Review operational alerts and workspace notifications. |
 | **Settings** | Manage application and workspace configuration. |
 
@@ -149,6 +151,159 @@ npm run db:seed:demo:cleanup -- --yes
 ```
 
 See [docs/demo-environment.md](docs/demo-environment.md) for additional demo environment details.
+
+## Monitoring, analytics and alerting
+
+The background worker claims each due target with a **lease** (`claimExpiresAt`), so two workers never
+probe the same target and a crashed worker's targets are reclaimed when the lease expires. After each
+check the worker evaluates configurable thresholds (`failureThreshold`, `recoveryThreshold`,
+`warningThresholdMs`, `criticalThresholdMs`) and drives the alert lifecycle:
+
+- **Deduplication** — a partial unique index allows exactly one active alert per
+  `targetId:condition`, so concurrent workers cannot duplicate alerts; recurrences after resolution
+  open a new alert.
+- **Maintenance suppression** — checks covered by an active maintenance window still record their real
+  result, but alert escalation and automatic incident creation are suppressed until the window ends.
+- **Automatic incidents** — critical alerts open an incident (unique per alert) with a system comment;
+  recovery adds a comment but never auto-closes the incident.
+- **Analytics** — uptime for 24 h/7 d/30 d plus average/min/max/p95/p99 latency and trends, aggregated
+  by MongoDB from stored results.
+
+See [docs/monitoring-alerting.md](docs/monitoring-alerting.md) for thresholds, the state machine,
+endpoints and operational notes.
+
+## Security operations: Trivy report import
+
+`POST /api/v1/security/imports` accepts a Trivy JSON report for an asset. InfraPilot parses it as data,
+validates size (≤ 2 MB), entry count (≤ 1,000) and CVE identifiers, and creates or refreshes findings
+keyed by asset/CVE/package. The upload is never executed and InfraPilot does **not** run Trivy itself:
+findings reflect the report's scan time and are labelled `source: trivy`.
+
+Remediation deadlines follow the severity policy (critical 7 days, high 30, medium 90, low 180,
+informational 365) and drive the overdue counters on the security dashboard. Details and the exact
+request/response contract: [docs/security-operations.md](docs/security-operations.md).
+
+## Incident SLA and timelines
+
+Incidents carry priority-based SLA targets (P1 15 min/4 h, P2 30 min/8 h, P3 2 h/24 h, P4 8 h/72 h).
+`GET /api/v1/incidents/sla` reports MTTA, MTTR, breaches and at-risk incidents; only incidents that are
+actually resolved contribute to MTTR, and unresolved incidents are never counted as met. The incident
+detail timeline merges comments with the originating monitoring alert's events, change requests that
+touch affected assets, and open findings on those assets, each labelled with its source.
+See [docs/incident-intelligence.md](docs/incident-intelligence.md).
+
+## Configuration
+
+Copy `.env.example` and set at least `MONGODB_URI`, `JWT_ACCESS_SECRET` (≥ 32 characters) and, in
+production, `APP_ORIGIN`. Monitoring and alerting knobs:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `MONITOR_TICK_MS` | 5000 | Scheduler interval. |
+| `MONITOR_BATCH_SIZE` | 25 | Targets claimed per tick. |
+| `MONITOR_MAX_CONCURRENCY` | 5 | Concurrent probes per worker process. |
+| `MONITOR_FAILURE_THRESHOLD` | 3 | Default consecutive failures before unavailable. |
+| `MONITOR_RECOVERY_THRESHOLD` | 2 | Default successes required to resolve an alert. |
+| `MONITOR_WARNING_THRESHOLD_MS` | 1500 | Default warning latency. |
+| `MONITOR_CRITICAL_THRESHOLD_MS` | 5000 | Default critical latency. |
+| `MONITOR_RETENTION_DAYS` | 30 | Check-result retention. |
+| `AUTO_INCIDENT_ENABLED` | true | Environment switch for automatic incidents (targets can opt out). |
+| `REQUIRED_CHANGE_APPROVALS` | 1 | Approvals needed before a change is approved. |
+
+Full deployment configuration, TLS and backup guidance: [docs/deployment.md](docs/deployment.md).
+
+## Testing
+
+```powershell
+npm test                 # unit, component and validation tests (integration suites skip without MONGODB_URI)
+npm run test:integration # MongoDB-backed alert, lease and worker-pipeline tests (needs MONGODB_URI)
+npm run test:e2e         # Playwright against a running stack
+npm run typecheck
+npm run lint
+npm run build
+```
+
+Unit tests cover alert classification, threshold resolution, deduplication keys, maintenance
+suppression, SLA arithmetic and the Trivy parser. Integration tests run the real worker sequence
+(probe → state → record → alerts) against a replica set and prove deduplication, automatic incidents,
+suppression and recovery. Playwright covers the alert console, global search and a Trivy import.
+
+## Continuous integration
+
+`.github/workflows/ci.yml` runs with least-privilege permissions and commit-SHA-pinned actions:
+
+- **Quality** — install, lint, type generation + type check, unit/component tests, production dependency
+  audit, build.
+- **MongoDB integration and worker pipeline** — replica set, collection/index initialization,
+  `npm run test:integration`, and a worker boot/health smoke test.
+- **End-to-end** — replica set, seed, demo idempotency/cleanup verification, build, Playwright.
+- **Code scanning** — CodeQL (`security-and-quality` queries).
+- **Secret scanning** — gitleaks on the full history.
+- **Dependency review** — high-severity advisories on pull requests.
+
+## Security model
+
+- JWT access tokens are short-lived and held in memory; refresh tokens live in an httpOnly cookie.
+- Role checks (`read`/`write`/`admin`) are enforced server-side on every route; route parameters are
+  UUID-validated and cross-origin mutations are refused unless the origin matches.
+- Monitoring destinations are validated (scheme, credentials, private/loopback/metadata ranges) before
+  storage and re-validated at probe time; redirects are not followed.
+- Uploaded scan reports are parsed defensively, bounded in size/count, and never executed.
+- 5xx responses are masked; errors carry a request ID that matches structured logs.
+- Audit entries record actor, action, entity and IP for alert, incident, finding, import and auth
+  actions.
+
+## Data model
+
+MongoDB is the only runtime database. Collections, indexes and schema-tolerance notes for alerts,
+scan imports and the extended incident/finding/monitoring documents are documented in
+[docs/database/mongodb.md](docs/database/mongodb.md). `initializeAppDatabase()` is idempotent and never
+drops or rewrites existing data.
+
+## Operating notes
+
+- Backend and worker are independent processes. The backend serves the API, health checks and the
+  frontend proxy; the worker owns scheduled checks, alert evaluation and retention pruning.
+- The worker exposes `/health/live` and `/health/ready` on `WORKER_HEALTH_PORT` (4010) and records a
+  heartbeat that `/health/worker` and the dashboard use.
+- Deploy multiple worker replicas safely: claims are leases, and alert/incident deduplication is
+  enforced by unique indexes.
+- `docs/deployment.md` covers reverse proxying, backups and the production checklist.
+
+## Troubleshooting
+
+| Symptom | Check |
+| --- | --- |
+| `/health/ready` returns 503 | MongoDB reachability; the response lists the failing dependency. |
+| `/health/worker` reports no active worker | Worker process, `WORKER_HEALTH_PORT`, and the heartbeat in `worker_statuses`. |
+| A target never runs | `enabled` flag, `nextCheckAt`, and whether an expired `claimExpiresAt` is reclaimable. |
+| Alerts are suppressed unexpectedly | Active maintenance window covering the asset, or a manual suppression with `suppressedUntil`. |
+| Trivy import returns 422 | Report shape (`Results`), size (≤ 2 MB), CVE identifiers, and the 1,000-entry limit. |
+| Login loops | `JWT_ACCESS_SECRET` stability across restarts and the refresh cookie's `Secure` flag over HTTPS. |
+
+## Delivered scope and remaining work
+
+Implemented in this iteration: alert lifecycle with database-enforced deduplication, configurable
+thresholds, real analytics (uptime/p95/p99), maintenance suppression, automatic incidents with recovery
+correlation, incident SLA metrics and acknowledgement, a correlated incident timeline, safe Trivy report
+import with a security dashboard, global search, worker leases, and integration/unit/E2E coverage.
+
+Not yet implemented, and therefore not claimed anywhere in the UI: CMDB relationships and a topology
+graph, change impact analysis, PDF exports, dashboard widget customisation, and per-field granular
+permissions beyond the existing role model. Dedicated CSV exports exist for assets and incidents;
+further report formats remain on the roadmap.
+
+## Documentation index
+
+| Document | Contents |
+| --- | --- |
+| [docs/monitoring-alerting.md](docs/monitoring-alerting.md) | Thresholds, alert state machine, deduplication, suppression, incidents, analytics API. |
+| [docs/security-operations.md](docs/security-operations.md) | Trivy import contract, validation, deduplication, remediation policy, permissions. |
+| [docs/incident-intelligence.md](docs/incident-intelligence.md) | SLA policy and metrics, timeline correlation, global search. |
+| [docs/database/mongodb.md](docs/database/mongodb.md) | Collections, indexes, schema tolerance. |
+| [docs/deployment.md](docs/deployment.md) | Production deployment, TLS, backups, checklist. |
+| [docs/api.md](docs/api.md) | REST API reference. |
+| [docs/demo-environment.md](docs/demo-environment.md) | Demo dataset, credentials, cleanup. |
 
 ## Useful commands
 

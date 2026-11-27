@@ -10,7 +10,10 @@ const state = vi.hoisted(() => ({
   unreadCount: 0,
 }));
 
-vi.mock("next/navigation", () => ({ usePathname: () => state.pathname }));
+vi.mock("next/navigation", () => ({
+  usePathname: () => state.pathname,
+  useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }),
+}));
 vi.mock("@/context/auth-context", () => ({
   useAuth: () => ({ user: state.user, signOut: vi.fn() }),
 }));
@@ -54,7 +57,7 @@ describe("AppShell navigation", () => {
     for (const group of ["Overview", "Infrastructure", "Operations", "Security", "Administration"]) {
       expect(screen.getByText(group)).toBeInTheDocument();
     }
-    for (const label of ["Dashboard", "Assets", "Monitoring", "Incidents", "Maintenance", "Change management", "Security findings"]) {
+    for (const label of ["Dashboard", "Assets", "Monitoring", "Alerts", "Incidents", "Maintenance", "Change management", "Security findings"]) {
       expect(screen.getByRole("link", { name: label })).toBeInTheDocument();
     }
     // No route exists for a "Services" section, so it must not be advertised.

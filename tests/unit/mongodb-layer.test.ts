@@ -178,11 +178,29 @@ vi.mock("@/db/collections", async (importOriginal) => {
 });
 
 describe("MongoDB collection registry & index manifest", () => {
-  it("registers all 20 InfraPilot collections consistently across collections.ts and app_db.ts", () => {
+  it("registers all 22 InfraPilot collections consistently across collections.ts and app_db.ts", () => {
     const registryNames = Object.values(collections).sort();
     const bootstrapNames = [...appDbCollectionNames].sort();
-    expect(registryNames).toHaveLength(20);
+    expect(registryNames).toHaveLength(22);
     expect(registryNames).toEqual(bootstrapNames);
+    expect(registryNames).toEqual(expect.arrayContaining(["alerts", "scan_imports"]));
+  });
+
+  it("enforces one active alert per monitored condition with a partial unique index", () => {
+    const index = appDbIndexes.find((idx) => idx.options.name === "alerts_active_dedupe_unique");
+    expect(index).toBeDefined();
+    expect(index?.options.unique).toBe(true);
+    expect(index?.options.partialFilterExpression).toEqual({
+      status: { $in: ["triggered", "acknowledged", "suppressed"] },
+    });
+  });
+
+  it("prevents duplicate automatic incidents per alert and duplicate vulnerability findings", () => {
+    const incidentIndex = appDbIndexes.find((idx) => idx.options.name === "incidents_source_alert_unique");
+    expect(incidentIndex?.options).toMatchObject({ unique: true, sparse: true });
+    const findingIndex = appDbIndexes.find((idx) => idx.options.name === "findings_vulnerability_unique");
+    expect(findingIndex?.options).toMatchObject({ unique: true });
+    expect(findingIndex?.keys).toEqual({ assetId: 1, cveId: 1, component: 1 });
   });
 
   it("ensures every collection has at least one unique identifier index", () => {

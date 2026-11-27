@@ -5,18 +5,25 @@ on:
     branches: [main]
   pull_request:
 
+# Least privilege by default; jobs opt in to the extra scopes they need.
 permissions:
   contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   quality:
     name: Install, lint, type-check, unit tests, build
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     env:
       JWT_ACCESS_SECRET: ci-only-access-secret-value-0123456789abcdef
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
       - name: Install dependencies
@@ -31,13 +38,83 @@ jobs:
         run: npm run typecheck:demo
       - name: Unit and component tests
         run: npm test
+      - name: Dependency audit (production tree)
+        run: npm audit --omit=dev --audit-level=high
       - name: Production build
         run: npm run build
+
+  integration:
+    name: MongoDB integration and worker pipeline
+    needs: quality
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      JWT_ACCESS_SECRET: ci-only-access-secret-value-0123456789abcdef
+      MONGODB_URI: mongodb://127.0.0.1:27017/infrapilot_integration?replicaSet=rs0
+      MONGODB_DB: infrapilot_integration
+      AUTO_INCIDENT_ENABLED: "true"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: npm ci --include=dev --no-audit --no-fund
+      - name: Start MongoDB replica set
+        run: |
+          docker run --detach --name infrapilot-mongo --publish 27017:27017 mongo:8.0 mongod --replSet rs0 --bind_ip_all
+          ready=false
+          for attempt in {1..30}; do
+            if docker exec infrapilot-mongo mongosh --quiet --eval "db.adminCommand('ping').ok" | grep -q 1; then
+              ready=true
+              break
+            fi
+            sleep 2
+          done
+          if [[ "$ready" != true ]]; then
+            docker logs infrapilot-mongo
+            echo "MongoDB did not start" >&2
+            exit 1
+          fi
+          docker exec infrapilot-mongo mongosh --quiet --eval "rs.initiate({_id:'rs0',members:[{_id:0,host:'127.0.0.1:27017'}]})"
+          for attempt in {1..30}; do
+            if docker exec infrapilot-mongo mongosh --quiet --eval "db.hello().isWritablePrimary" | grep -q true; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "MongoDB replica set did not elect a primary" >&2
+          exit 1
+      - name: Initialise collections and indexes
+        run: npm run db:init:mongo
+      - name: Integration tests (alerts, leases, monitoring pipeline)
+        run: npm run test:integration
+      - name: Worker boots and serves health
+        env:
+          WORKER_HEALTH_PORT: "4010"
+        run: |
+          npm run start:worker > /tmp/worker.log 2>&1 &
+          worker_pid=$!
+          for attempt in {1..30}; do
+            if curl -fsS http://127.0.0.1:4010/health/live > /tmp/worker-health.json; then
+              cat /tmp/worker-health.json
+              kill "$worker_pid"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Worker did not become healthy" >&2
+          kill "$worker_pid" || true
+          cat /tmp/worker.log
+          exit 1
 
   e2e:
     name: End-to-end (Playwright)
     needs: quality
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     env:
       MONGODB_URI: mongodb://127.0.0.1:27017/infrapilot?replicaSet=rs0
       MONGODB_DB: infrapilot
@@ -48,8 +125,8 @@ jobs:
       DEMO_SEED_PASSWORD: CiDemo-Password-2026
       EXPOSE_RESET_TOKEN: "true"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
       - name: Install dependencies
@@ -111,10 +188,54 @@ jobs:
             | awk '/^  [0-9]+\) /{flag=1} flag || /^Running [0-9]+ tests?/{print}' \
             | head -45 \
             | while IFS= read -r line; do echo "::error::${line:0:900}"; done
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: failure()
         with:
           name: playwright-report
           path: |
             playwright-report/
             test-results/
+
+  codeql:
+    name: Code scanning (CodeQL)
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+      packages: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2
+      - uses: github/codeql-action/init@74c1aea9df7c0f02e9b7bfe4a8935abf2e5e3aa6 # v3.29.5
+        with:
+          languages: javascript-typescript
+          queries: security-and-quality
+      - uses: github/codeql-action/analyze@74c1aea9df7c0f02e9b7bfe4a8935abf2e5e3aa6 # v3.29.5
+        with:
+          category: "/language:javascript-typescript"
+
+  secrets:
+    name: Secret scanning (gitleaks)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.7
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  dependency-review:
+    name: Dependency review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2
+      - uses: actions/dependency-review-action@bbc44d14a204704ccc493733616cd1e93a0321ec # v5.0.1
+        with:
+          fail-on-severity: high
