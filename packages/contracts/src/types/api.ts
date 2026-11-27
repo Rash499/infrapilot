@@ -100,6 +100,11 @@ export interface MonitorTarget {
   intervalSeconds: number;
   timeoutMs: number;
   degradedThresholdMs: number;
+  failureThreshold: number;
+  recoveryThreshold: number;
+  warningThresholdMs: number;
+  criticalThresholdMs: number;
+  autoIncidentEnabled: boolean;
   enabled: boolean;
   allowPrivateNetwork: boolean;
   assetId: string | null;
@@ -138,6 +143,100 @@ export interface TargetDetail extends MonitorTarget {
   recentResults: MonitorResult[];
 }
 
+export interface MonitoringTrendPoint {
+  ts: string;
+  total: number;
+  ok: number;
+  avgMs: number | null;
+  uptimePct: number | null;
+}
+
+export interface MonitoringTotals {
+  total: number;
+  ok: number;
+  failed: number;
+  avgMs: number | null;
+  minMs: number | null;
+  maxMs: number | null;
+  p95Ms: number | null;
+  p99Ms: number | null;
+}
+
+export interface MonitoringTargetAnalyticsPoint {
+  id: string;
+  name: string;
+  status: ServiceState;
+  monitorType: "http" | "tcp";
+  assetName: string | null;
+  uptimePct: number | null;
+  total: number;
+  failed: number;
+  avgMs: number | null;
+  maxMs: number | null;
+  p95Ms: number | null;
+  p99Ms: number | null;
+}
+
+export interface MonitoringAnalytics {
+  range: "24h" | "7d" | "30d";
+  since: string;
+  uptime: { h24: number | null; d7: number | null; d30: number | null };
+  totals: MonitoringTotals;
+  uptimePct: number | null;
+  trend: MonitoringTrendPoint[];
+  targets: MonitoringTargetAnalyticsPoint[];
+}
+
+export type AlertStatus = "triggered" | "acknowledged" | "resolved" | "suppressed";
+export type AlertSeverity = "critical" | "warning";
+export type AlertKind = "availability" | "latency";
+
+export interface AlertEventItem {
+  at: string;
+  type: string;
+  actorId: string | null;
+  actorName: string | null;
+  note: string | null;
+}
+
+export interface Alert {
+  id: string;
+  dedupeKey: string;
+  kind: AlertKind;
+  severity: AlertSeverity;
+  status: AlertStatus;
+  title: string;
+  message: string;
+  triggerCondition: string;
+  occurrences: number;
+  triggeredAt: string;
+  lastSeenAt: string;
+  acknowledgedAt: string | null;
+  acknowledgedById: string | null;
+  acknowledgedByName: string | null;
+  resolvedAt: string | null;
+  resolvedById: string | null;
+  resolvedByName: string | null;
+  resolutionNotes: string | null;
+  suppressedUntil: string | null;
+  suppressionReason: string | null;
+  incidentId: string | null;
+  target: { id: string; name: string };
+  asset: { id: string; name: string } | null;
+  events: AlertEventItem[];
+}
+
+export interface AlertSummary {
+  active: number;
+  triggered: number;
+  acknowledged: number;
+  suppressed: number;
+  resolved: number;
+  criticalActive: number;
+  warningActive: number;
+  trend: { date: string; triggered: number; resolved: number }[];
+}
+
 export type FindingSeverity = "critical" | "high" | "medium" | "low" | "informational";
 export type FindingStatus = "open" | "in_progress" | "resolved" | "accepted_risk";
 
@@ -162,6 +261,14 @@ export interface Finding {
   assigneeName: string | null;
   remediation: string | null;
   cveId: string | null;
+  cvssScore: number | null;
+  component: string | null;
+  installedVersion: string | null;
+  fixedVersion: string | null;
+  remediationDeadline: string | null;
+  source: "manual" | "trivy";
+  scanId: string | null;
+  lastSeenAt: string | null;
   createdById: string | null;
   createdByName: string | null;
   resolvedAt: string | null;
@@ -177,6 +284,34 @@ export interface TimelineItem {
   authorId: string | null;
   authorName: string;
   createdAt: string;
+  source?: "comment" | "alert" | "change" | "finding";
+  href?: string;
+}
+
+export interface IncidentSla {
+  acknowledgeDueAt: string;
+  resolveDueAt: string;
+  acknowledgedAt: string | null;
+  resolvedAt: string | null;
+  acknowledgeBreached: boolean;
+  resolveBreached: boolean;
+  state: "met" | "pending" | "at_risk" | "breached";
+  minutesToAcknowledge: number | null;
+  minutesToResolve: number | null;
+}
+
+export interface IncidentSlaMetrics {
+  days: number;
+  openIncidents: number;
+  resolvedIncidents: number;
+  breachedSla: number;
+  atRiskSla: number;
+  mttaMinutes: number | null;
+  mttrMinutes: number | null;
+  volume: number;
+  bySeverity: { severity: string; count: number }[];
+  resolutionTrend: { date: string; opened: number; resolved: number }[];
+  policy: Record<string, string>;
 }
 
 export interface Incident {
@@ -197,10 +332,18 @@ export interface Incident {
   openedAt: string;
   resolvedAt: string | null;
   closedAt: string | null;
+  acknowledgedAt?: string | null;
+  category?: string | null;
+  impact?: string | null;
+  urgency?: string | null;
+  autoCreated?: boolean;
+  sourceAlertId?: string | null;
   createdAt: string;
   updatedAt: string;
   assets?: { id: string; name: string; assetType: AssetType; status: AssetStatus }[];
   timeline?: TimelineItem[];
+  sla?: IncidentSla;
+  monitoringAlert?: { id: string; status: string; severity: string; title: string; triggeredAt: string } | null;
 }
 
 export interface Maintenance {
@@ -337,4 +480,69 @@ export interface Dashboard {
     updatedAt: string;
   }[];
   generatedAt: string;
+}
+
+export interface SecurityDashboard {
+  open: number;
+  bySeverity: { severity: string; count: number }[];
+  byStatus: { status: string; count: number }[];
+  overdue: number;
+  dueSoon: number;
+  openCritical: number;
+  topAssets: { id: string; name: string; count: number }[];
+  createdTrend: { date: string; count: number }[];
+}
+
+export interface TrivyImportResult {
+  scanId: string;
+  asset: { id: string; name: string };
+  scanner: "trivy";
+  artifactName: string;
+  artifactType: string | null;
+  scannerVersion: string | null;
+  scannedAt: string | null;
+  importedAt: string | null;
+  vulnerabilitiesSeen: number;
+  findingsCreated: number;
+  findingsUpdated: number;
+  findingsSkipped: number;
+  findingsReopened: number;
+  criticalCount: number;
+  highCount: number;
+  duplicateCount: number;
+  skipped: { id: string; reason: string }[];
+  remediationPolicyDays: Record<string, number>;
+}
+
+export interface ScanImportSummary {
+  id: string;
+  scanner: string;
+  artifactName: string | null;
+  artifactType: string | null;
+  vulnerabilitiesSeen: number;
+  findingsCreated: number;
+  findingsUpdated: number;
+  findingsSkipped: number;
+  importedAt: string;
+}
+
+export interface SearchHit {
+  id: string;
+  title: string;
+  subtitle: string;
+  href: string;
+  meta?: string | null;
+}
+
+export interface SearchGroup {
+  key: string;
+  label: string;
+  total: number;
+  items: SearchHit[];
+}
+
+export interface SearchResults {
+  q: string;
+  groups: SearchGroup[];
+  totalHits: number;
 }

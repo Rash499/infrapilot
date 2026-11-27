@@ -22,6 +22,7 @@ export const errors = {
   unprocessable: (message: string, details?: unknown) => new ApiError(422, "UNPROCESSABLE", message, details),
   tooManyRequests: (message = "Too many requests, please try again later") =>
     new ApiError(429, "RATE_LIMITED", message),
+  payloadTooLarge: (message = "Request payload is too large") => new ApiError(413, "PAYLOAD_TOO_LARGE", message),
 };
 
 export interface PaginationMeta {

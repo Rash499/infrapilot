@@ -175,3 +175,24 @@ export async function transitionChangeRequest(
     { returnDocument: "after" },
   );
 }
+
+/** Change requests that touch any of the given assets, newest first (used for impact analysis). */
+export async function listChangeRequestsForAssets(assetIds: string[], limit = 20): Promise<ChangeRequestDoc[]> {
+  if (assetIds.length === 0) return [];
+  const links = await getCollection<ChangeAssetDoc>(collections.changeAssets);
+  const rows = await links.find({ assetId: { $in: assetIds } }).toArray();
+  if (rows.length === 0) return [];
+  const changes = await getCollection<ChangeRequestDoc>(collections.changeRequests);
+  return changes
+    .find({ id: { $in: [...new Set(rows.map((row) => row.changeId))] } })
+    .sort({ createdAt: -1 })
+    .limit(limit)
+    .toArray();
+}
+
+/** Counts approved changes per asset, used to show implementation coverage. */
+export async function listChangeAssetLinks(assetIds: string[]): Promise<ChangeAssetDoc[]> {
+  if (assetIds.length === 0) return [];
+  const links = await getCollection<ChangeAssetDoc>(collections.changeAssets);
+  return links.find({ assetId: { $in: assetIds } }).toArray();
+}

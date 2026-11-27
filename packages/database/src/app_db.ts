@@ -12,7 +12,7 @@ const COLLECTIONS = [
   "incidents", "incident_assets", "incident_comments", "maintenances",
   "maintenance_assets", "change_requests", "change_assets", "change_approvals",
   "notifications", "audit_logs",
-  "worker_statuses",
+  "worker_statuses", "alerts", "scan_imports",
 ] as const;
 
 type CollectionName = (typeof COLLECTIONS)[number];
@@ -98,6 +98,48 @@ const INDEXES: IndexSpec[] = [
   { collection: "audit_logs", keys: { createdAt: -1 }, options: { name: "audit_created" } },
   { collection: "worker_statuses", keys: { id: 1 }, options: { unique: true, name: "worker_status_id_unique" } },
   { collection: "worker_statuses", keys: { status: 1, heartbeatAt: -1 }, options: { name: "worker_status_heartbeat" } },
+
+  // Alerts: one active alert per monitored condition, enforced by a partial unique index.
+  { collection: "alerts", keys: { id: 1 }, options: { unique: true, name: "alerts_id_unique" } },
+  {
+    collection: "alerts",
+    keys: { dedupeKey: 1 },
+    options: {
+      unique: true,
+      name: "alerts_active_dedupe_unique",
+      partialFilterExpression: { status: { $in: ["triggered", "acknowledged", "suppressed"] } },
+    },
+  },
+  { collection: "alerts", keys: { status: 1, severity: 1, triggeredAt: -1 }, options: { name: "alerts_status_severity_time" } },
+  { collection: "alerts", keys: { targetId: 1, status: 1 }, options: { name: "alerts_target_status" } },
+  { collection: "alerts", keys: { assetId: 1, status: 1 }, options: { name: "alerts_asset_status" } },
+  { collection: "alerts", keys: { incidentId: 1 }, options: { name: "alerts_incident" } },
+
+  // Automatic incidents are deduplicated by their originating alert.
+  {
+    collection: "incidents",
+    keys: { sourceAlertId: 1 },
+    options: { unique: true, sparse: true, name: "incidents_source_alert_unique" },
+  },
+  { collection: "incidents", keys: { acknowledgedAt: 1 }, options: { sparse: true, name: "incidents_acknowledged" } },
+
+  // Vulnerability imports: one finding per asset/CVE/component, plus import audit rows.
+  {
+    collection: "security_findings",
+    keys: { assetId: 1, cveId: 1, component: 1 },
+    options: {
+      unique: true,
+      name: "findings_vulnerability_unique",
+      partialFilterExpression: { cveId: { $type: "string" }, component: { $type: "string" } },
+    },
+  },
+  { collection: "security_findings", keys: { remediationDeadline: 1, status: 1 }, options: { name: "findings_deadline_status" } },
+  { collection: "scan_imports", keys: { id: 1 }, options: { unique: true, name: "scan_imports_id_unique" } },
+  { collection: "scan_imports", keys: { assetId: 1, importedAt: -1 }, options: { name: "scan_imports_asset_time" } },
+
+  // Monitoring thresholds and worker leases.
+  { collection: "monitoring_targets", keys: { enabled: 1, status: 1 }, options: { name: "monitoring_targets_enabled_status" } },
+  { collection: "monitoring_targets", keys: { claimExpiresAt: 1 }, options: { sparse: true, name: "monitoring_targets_claim_expiry" } },
 ];
 
 /** Create the InfraPilot collections and indexes without deleting existing documents. */

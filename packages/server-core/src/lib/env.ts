@@ -26,6 +26,15 @@ const envSchema = z.object({
   MONITOR_BATCH_SIZE: z.coerce.number().int().min(1).max(200).default(25),
   MONITOR_FAILURE_THRESHOLD: z.coerce.number().int().min(1).max(20).default(3),
   MONITOR_RETENTION_DAYS: z.coerce.number().int().min(1).max(365).default(30),
+  // Alerting defaults applied to targets that do not define their own thresholds.
+  MONITOR_WARNING_THRESHOLD_MS: z.coerce.number().int().min(1).max(600_000).default(1500),
+  MONITOR_CRITICAL_THRESHOLD_MS: z.coerce.number().int().min(1).max(600_000).default(5000),
+  MONITOR_RECOVERY_THRESHOLD: z.coerce.number().int().min(1).max(20).default(2),
+  // Automatic incident creation from critical monitoring alerts. Per-target opt-out is still honoured.
+  AUTO_INCIDENT_ENABLED: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v === "true"),
   REQUIRED_CHANGE_APPROVALS: z.coerce.number().int().min(1).max(5).default(1),
   APP_ORIGIN: z.string().url().optional(),
 });

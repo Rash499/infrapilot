@@ -41,6 +41,20 @@ export type ChangeStatus =
 export type RiskLevel = "low" | "medium" | "high";
 export type ApprovalDecision = "approved" | "rejected";
 export type CommentKind = "comment" | "system";
+export type AlertStatus = "triggered" | "acknowledged" | "resolved" | "suppressed";
+export type AlertSeverity = "critical" | "warning";
+export type AlertKind = "availability" | "latency";
+export type AlertEventType =
+  | "triggered"
+  | "refreshed"
+  | "acknowledged"
+  | "resolved"
+  | "suppressed"
+  | "unsuppressed"
+  | "incident_created";
+export type AssetCriticality = "tier_1" | "tier_2" | "tier_3" | "tier_4";
+export type AssetLifecycle = "in_service" | "staging" | "retired" | "planned";
+
 export type NotificationType =
   | "monitoring_unavailable"
   | "monitoring_recovered"
@@ -51,6 +65,11 @@ export type NotificationType =
   | "maintenance_reminder"
   | "change_pending_approval"
   | "change_decision"
+  | "alert_triggered"
+  | "alert_acknowledged"
+  | "alert_resolved"
+  | "incident_auto_created"
+  | "security_import"
   | "general";
 
 export interface UserDoc extends MongoEntity {
@@ -106,6 +125,14 @@ export interface AssetDoc extends MongoEntity {
   status: AssetStatus;
   archivedAt: Date | null;
   createdById: string | null;
+  // Optional CMDB attributes: documents created before these existed simply omit them.
+  assetTag?: string | null;
+  department?: string | null;
+  criticality?: AssetCriticality | null;
+  lifecycleStatus?: AssetLifecycle | null;
+  manufacturer?: string | null;
+  model?: string | null;
+  serialNumber?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -121,6 +148,16 @@ export interface MonitoringTargetDoc extends MongoEntity {
   intervalSeconds: number;
   timeoutMs: number;
   degradedThresholdMs: number;
+  /** Consecutive failures before the target is reported unavailable. Defaults are applied on read. */
+  failureThreshold?: number;
+  /** Consecutive successes required to leave the unavailable state. */
+  recoveryThreshold?: number;
+  /** Response time that raises a warning alert. */
+  warningThresholdMs?: number;
+  /** Response time that raises a critical latency alert. */
+  criticalThresholdMs?: number;
+  /** Monitored targets may opt out of automatic incident creation. */
+  autoIncidentEnabled?: boolean;
   enabled: boolean;
   allowPrivateNetwork: boolean;
   assetId: string | null;
@@ -157,6 +194,15 @@ export interface SecurityFindingDoc extends MongoEntity {
   remediation: string | null;
   cveId: string | null;
   createdById: string | null;
+  // Optional vulnerability metadata, populated by the Trivy importer or manual edits.
+  cvssScore?: number | null;
+  component?: string | null;
+  installedVersion?: string | null;
+  fixedVersion?: string | null;
+  remediationDeadline?: Date | null;
+  source?: "manual" | "trivy";
+  scanId?: string | null;
+  lastSeenAt?: Date | null;
   resolvedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
@@ -182,6 +228,14 @@ export interface IncidentDoc extends MongoEntity {
   status: IncidentStatus;
   assigneeId: string | null;
   reporterId: string | null;
+  // Added for SLA tracking, richer triage and automatic incident creation.
+  category?: string | null;
+  impact?: string | null;
+  urgency?: string | null;
+  acknowledgedAt?: Date | null;
+  sourceAlertId?: string | null;
+  sourceMonitoringTargetId?: string | null;
+  autoCreated?: boolean;
   rootCause: string | null;
   resolution: string | null;
   openedAt: Date;
@@ -291,4 +345,57 @@ export interface WorkerStatusDoc extends MongoEntity {
   lastTickAt: Date | null;
   lastTickClaimed: number;
   lastError: string | null;
+}
+
+export interface AlertEvent {
+  at: Date;
+  type: AlertEventType;
+  actorId: string | null;
+  note: string | null;
+}
+
+export interface AlertDoc extends MongoEntity {
+  id: string;
+  /** Stable key for the monitored condition; only one active alert may exist per key. */
+  dedupeKey: string;
+  kind: AlertKind;
+  targetId: string;
+  assetId: string | null;
+  severity: AlertSeverity;
+  status: AlertStatus;
+  title: string;
+  message: string;
+  triggerCondition: string;
+  occurrences: number;
+  triggeredAt: Date;
+  lastSeenAt: Date;
+  acknowledgedAt: Date | null;
+  acknowledgedById: string | null;
+  resolvedAt: Date | null;
+  resolvedById: string | null;
+  resolutionNotes: string | null;
+  suppressedAt: Date | null;
+  suppressedUntil: Date | null;
+  suppressionReason: string | null;
+  incidentId: string | null;
+  events: AlertEvent[];
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface ScanImportDoc extends MongoEntity {
+  id: string;
+  assetId: string;
+  scanner: "trivy";
+  artifactName: string | null;
+  artifactType: string | null;
+  reportVersion: number | null;
+  importedById: string;
+  vulnerabilitiesSeen: number;
+  findingsCreated: number;
+  findingsUpdated: number;
+  findingsSkipped: number;
+  importedAt: Date;
+  createdAt: Date;
+  updatedAt: Date;
 }

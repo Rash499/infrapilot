@@ -144,3 +144,33 @@ export async function releaseMaintenanceReminderClaim(id: string, claimedAt: Dat
   const col = await getCollection<MaintenanceDoc>(collections.maintenances);
   await col.updateOne({ id, reminderSentAt: claimedAt }, { $set: { reminderSentAt: null, updatedAt: new Date() } });
 }
+
+/**
+ * Maintenance windows that currently cover any of the given assets.
+ *
+ * Used by the worker to suppress alert escalation during planned work. Windows must overlap `at`
+ * and be scheduled or in progress; completed/cancelled windows never suppress anything.
+ */
+export async function findActiveMaintenanceForAssets(
+  assetIds: string[],
+  at: Date,
+): Promise<Array<{ assetId: string; window: MaintenanceDoc }>> {
+  if (assetIds.length === 0) return [];
+  const maintenances = await getCollection<MaintenanceDoc>(collections.maintenances);
+  const links = await getCollection<MaintenanceAssetDoc>(collections.maintenanceAssets);
+  const assetLinks = await links.find({ assetId: { $in: assetIds } }).toArray();
+  if (assetLinks.length === 0) return [];
+  const windows = await maintenances
+    .find({
+      id: { $in: [...new Set(assetLinks.map((link) => link.maintenanceId))] },
+      status: { $in: ["scheduled", "in_progress"] },
+      startsAt: { $lte: at },
+      endsAt: { $gt: at },
+    })
+    .toArray();
+  const byId = new Map(windows.map((window) => [window.id, window]));
+  return assetLinks.flatMap((link) => {
+    const window = byId.get(link.maintenanceId);
+    return window ? [{ assetId: link.assetId, window }] : [];
+  });
+}

@@ -5,7 +5,9 @@ import {
   findMonitoringTargetById,
   getMonitoringResultSummary,
   getMonitoringTargetCounts,
+  getMonitoringTrend,
   getMonitoringUptime,
+  getMonitoringWindowMetrics,
   insertMonitoringTarget,
   listMonitoringResults,
   listMonitoringTargets,
@@ -98,6 +100,11 @@ function toDto(row: TargetRow, assetName: string | null, uptime24h: number | nul
     intervalSeconds: row.intervalSeconds,
     timeoutMs: row.timeoutMs,
     degradedThresholdMs: row.degradedThresholdMs,
+    failureThreshold: row.failureThreshold ?? 3,
+    recoveryThreshold: row.recoveryThreshold ?? 2,
+    warningThresholdMs: row.warningThresholdMs ?? row.degradedThresholdMs,
+    criticalThresholdMs: row.criticalThresholdMs ?? 5000,
+    autoIncidentEnabled: row.autoIncidentEnabled !== false,
     enabled: row.enabled,
     allowPrivateNetwork: row.allowPrivateNetwork,
     assetId: row.assetId,
@@ -186,6 +193,11 @@ export async function createTarget(actor: AuthUser, input: CreateInput, ip: stri
     intervalSeconds: input.intervalSeconds,
     timeoutMs: input.timeoutMs,
     degradedThresholdMs: input.degradedThresholdMs,
+    failureThreshold: input.failureThreshold,
+    recoveryThreshold: input.recoveryThreshold,
+    warningThresholdMs: input.warningThresholdMs,
+    criticalThresholdMs: input.criticalThresholdMs,
+    autoIncidentEnabled: input.autoIncidentEnabled,
     enabled: input.enabled,
     allowPrivateNetwork: input.allowPrivateNetwork,
     assetId: input.assetId,
@@ -235,6 +247,11 @@ export async function updateTarget(actor: AuthUser, id: string, input: UpdateInp
     intervalSeconds: input.intervalSeconds ?? existing.intervalSeconds,
     timeoutMs: input.timeoutMs ?? existing.timeoutMs,
     degradedThresholdMs: input.degradedThresholdMs ?? existing.degradedThresholdMs,
+    failureThreshold: input.failureThreshold ?? existing.failureThreshold ?? 3,
+    recoveryThreshold: input.recoveryThreshold ?? existing.recoveryThreshold ?? 2,
+    warningThresholdMs: input.warningThresholdMs ?? existing.warningThresholdMs ?? existing.degradedThresholdMs,
+    criticalThresholdMs: input.criticalThresholdMs ?? existing.criticalThresholdMs ?? 5000,
+    autoIncidentEnabled: input.autoIncidentEnabled ?? existing.autoIncidentEnabled ?? true,
     enabled: input.enabled ?? existing.enabled,
     allowPrivateNetwork,
     assetId: input.assetId !== undefined ? input.assetId : existing.assetId,
@@ -327,5 +344,132 @@ export async function monitoringOverview() {
     avgResponse24hMs: agg.avgMs ? Math.round(agg.avgMs) : null,
     checks24h: agg.total,
     services: targets.map((row) => toDto(row, row.assetId ? assetNames.get(row.assetId) ?? null : null, pct(uptime.get(row.id)))),
+  };
+}
+
+export type AnalyticsRange = "24h" | "7d" | "30d";
+const ANALYTICS_MS: Record<AnalyticsRange, number> = {
+  "24h": 24 * HOUR,
+  "7d": 7 * 24 * HOUR,
+  "30d": 30 * 24 * HOUR,
+};
+
+function uptimePct(ok: number, total: number): number | null {
+  return total > 0 ? Math.round((ok / total) * 10000) / 100 : null;
+}
+
+/**
+ * Fleet-wide monitoring analytics.
+ *
+ * Uptime for the three standard windows, latency distribution (average/min/max/p95/p99) and a trend
+ * series are all computed by MongoDB from `monitoring_results`; nothing is estimated client-side.
+ */
+export async function monitoringAnalytics(range: AnalyticsRange) {
+  const since = new Date(Date.now() - ANALYTICS_MS[range]);
+  const windows = await Promise.all([
+    getMonitoringWindowMetrics({ since: new Date(Date.now() - ANALYTICS_MS["24h"]) }),
+    getMonitoringWindowMetrics({ since: new Date(Date.now() - ANALYTICS_MS["7d"]) }),
+    getMonitoringWindowMetrics({ since: new Date(Date.now() - ANALYTICS_MS["30d"]) }),
+  ]);
+  const [current, trend, targets] = await Promise.all([
+    getMonitoringWindowMetrics({ since }),
+    getMonitoringTrend({ since, unit: range === "24h" ? "hour" : "day" }),
+    listMonitoringTargetsForOverview(200),
+  ]);
+
+  const names = await findAssetNamesByIds(targets.map((row) => row.assetId).filter((id): id is string => !!id));
+  const assetNames = new Map(names.map((row) => [row.id, row.name]));
+
+  return {
+    range,
+    since: iso(since),
+    uptime: {
+      h24: uptimePct(windows[0].overall.ok, windows[0].overall.total),
+      d7: uptimePct(windows[1].overall.ok, windows[1].overall.total),
+      d30: uptimePct(windows[2].overall.ok, windows[2].overall.total),
+    },
+    totals: current.overall,
+    uptimePct: uptimePct(current.overall.ok, current.overall.total),
+    trend: trend.map((row) => ({
+      ts: row.ts.toISOString(),
+      total: row.total,
+      ok: row.ok,
+      avgMs: row.avgMs === null ? null : Math.round(row.avgMs),
+      uptimePct: uptimePct(row.ok, row.total),
+    })),
+    targets: targets.map((row) => {
+      const metrics = current.byTarget.get(row.id);
+      return {
+        id: row.id,
+        name: row.name,
+        status: row.status,
+        monitorType: row.monitorType,
+        assetName: row.assetId ? assetNames.get(row.assetId) ?? null : null,
+        uptimePct: metrics ? uptimePct(metrics.ok, metrics.total) : null,
+        total: metrics?.total ?? 0,
+        failed: metrics?.failed ?? 0,
+        avgMs: metrics?.avgMs === null || metrics?.avgMs === undefined ? null : Math.round(metrics.avgMs),
+        maxMs: metrics?.maxMs ?? null,
+        p95Ms: metrics?.p95Ms ?? null,
+        p99Ms: metrics?.p99Ms ?? null,
+      };
+    }),
+  };
+}
+
+/** Per-target analytics with the same real aggregates plus recent alert context. */
+export async function targetAnalytics(id: string, range: AnalyticsRange) {
+  const target = await findMonitoringTargetById(id);
+  if (!target) throw errors.notFound("Monitoring target");
+  const since = new Date(Date.now() - ANALYTICS_MS[range]);
+  const [current, windows, trend] = await Promise.all([
+    getMonitoringWindowMetrics({ since, targetIds: [id] }),
+    Promise.all([
+      getMonitoringWindowMetrics({ since: new Date(Date.now() - ANALYTICS_MS["24h"]), targetIds: [id] }),
+      getMonitoringWindowMetrics({ since: new Date(Date.now() - ANALYTICS_MS["7d"]), targetIds: [id] }),
+      getMonitoringWindowMetrics({ since: new Date(Date.now() - ANALYTICS_MS["30d"]), targetIds: [id] }),
+    ]),
+    getMonitoringTrend({ since, unit: range === "24h" ? "hour" : "day" }),
+  ]);
+  const assetNames = target.assetId ? await findAssetNamesByIds([target.assetId]) : [];
+  const metrics = current.byTarget.get(id) ?? {
+    total: 0,
+    ok: 0,
+    failed: 0,
+    avgMs: null,
+    minMs: null,
+    maxMs: null,
+    p95Ms: null,
+    p99Ms: null,
+  };
+  return {
+    range,
+    since: iso(since),
+    target: {
+      id: target.id,
+      name: target.name,
+      status: target.status,
+      monitorType: target.monitorType,
+      assetId: target.assetId,
+      assetName: assetNames[0]?.name ?? null,
+      intervalSeconds: target.intervalSeconds,
+      warningThresholdMs: target.warningThresholdMs ?? target.degradedThresholdMs,
+      criticalThresholdMs: target.criticalThresholdMs ?? 5000,
+      failureThreshold: target.failureThreshold ?? 3,
+    },
+    uptime: {
+      h24: uptimePct(windows[0].overall.ok, windows[0].overall.total),
+      d7: uptimePct(windows[1].overall.ok, windows[1].overall.total),
+      d30: uptimePct(windows[2].overall.ok, windows[2].overall.total),
+    },
+    uptimePct: uptimePct(metrics.ok, metrics.total),
+    totals: metrics,
+    trend: trend.map((row) => ({
+      ts: row.ts.toISOString(),
+      total: row.total,
+      ok: row.ok,
+      avgMs: row.avgMs === null ? null : Math.round(row.avgMs),
+      uptimePct: uptimePct(row.ok, row.total),
+    })),
   };
 }

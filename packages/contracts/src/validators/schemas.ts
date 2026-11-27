@@ -160,6 +160,11 @@ export const monitorBodySchema = z.object({
   intervalSeconds: z.coerce.number().int().min(30).max(86400).default(60),
   timeoutMs: z.coerce.number().int().min(500).max(30000).default(5000),
   degradedThresholdMs: z.coerce.number().int().min(50).max(60000).default(1000),
+  failureThreshold: z.coerce.number().int().min(1).max(20).default(3),
+  recoveryThreshold: z.coerce.number().int().min(1).max(20).default(2),
+  warningThresholdMs: z.coerce.number().int().min(50).max(120000).default(1500),
+  criticalThresholdMs: z.coerce.number().int().min(50).max(300000).default(5000),
+  autoIncidentEnabled: z.boolean().default(true),
   enabled: z.boolean().default(true),
   allowPrivateNetwork: z.boolean().default(false),
   assetId: uuid.nullish().transform((v) => v ?? null),
@@ -176,12 +181,28 @@ export const monitorCreateSchema = monitorBodySchema.superRefine((v, ctx) => {
 });
 
 export const monitorUpdateSchema = monitorBodySchema
-  .omit({ intervalSeconds: true, timeoutMs: true, degradedThresholdMs: true, enabled: true, allowPrivateNetwork: true })
+  .omit({
+    intervalSeconds: true,
+    timeoutMs: true,
+    degradedThresholdMs: true,
+    failureThreshold: true,
+    recoveryThreshold: true,
+    warningThresholdMs: true,
+    criticalThresholdMs: true,
+    autoIncidentEnabled: true,
+    enabled: true,
+    allowPrivateNetwork: true,
+  })
   .partial()
   .extend({
     intervalSeconds: z.coerce.number().int().min(30).max(86400).optional(),
     timeoutMs: z.coerce.number().int().min(500).max(30000).optional(),
     degradedThresholdMs: z.coerce.number().int().min(50).max(60000).optional(),
+    failureThreshold: z.coerce.number().int().min(1).max(20).optional(),
+    recoveryThreshold: z.coerce.number().int().min(1).max(20).optional(),
+    warningThresholdMs: z.coerce.number().int().min(50).max(120000).optional(),
+    criticalThresholdMs: z.coerce.number().int().min(50).max(300000).optional(),
+    autoIncidentEnabled: z.boolean().optional(),
     enabled: z.boolean().optional(),
     allowPrivateNetwork: z.boolean().optional(),
   });
@@ -210,6 +231,10 @@ export const findingBodySchema = z.object({
   assetId: uuid.nullish().transform((v) => v ?? null),
   assigneeId: uuid.nullish().transform((v) => v ?? null),
   remediation: nullableText(8000),
+  cvssScore: z.coerce.number().min(0).max(10).nullish().transform((v) => v ?? null).optional(),
+  component: optionalTrimmed(120).optional(),
+  installedVersion: optionalTrimmed(80).optional(),
+  fixedVersion: optionalTrimmed(80).optional(),
   cveId: z
     .string()
     .trim()
@@ -249,6 +274,9 @@ export const incidentCreateSchema = z.object({
   priority: z.enum(incidentPriorities),
   assigneeId: uuid.nullish().transform((v) => v ?? null),
   assetIds: z.array(uuid).max(50).default([]),
+  category: optionalTrimmed(80).optional(),
+  impact: optionalTrimmed(40).optional(),
+  urgency: optionalTrimmed(40).optional(),
 });
 
 export const incidentUpdateSchema = z
@@ -262,6 +290,9 @@ export const incidentUpdateSchema = z
     assetIds: z.array(uuid).max(50).optional(),
     rootCause: nullableText(8000).optional(),
     resolution: nullableText(8000).optional(),
+    category: optionalTrimmed(80).optional(),
+    impact: optionalTrimmed(40).optional(),
+    urgency: optionalTrimmed(40).optional(),
   })
   .refine((v) => Object.keys(v).length > 0, "At least one field is required");
 
@@ -387,6 +418,50 @@ export const changeListQuery = paginationQuery.extend({
 
 export const notificationListQuery = paginationQuery.extend({
   unread: z.enum(["true", "false"]).default("false"),
+});
+
+/* ---------- alerts ---------- */
+
+export const alertStatuses = ["triggered", "acknowledged", "resolved", "suppressed"] as const;
+export const alertSeverities = ["critical", "warning"] as const;
+export const alertKinds = ["availability", "latency"] as const;
+
+export const alertListQuery = paginationQuery.extend({
+  status: z.enum(alertStatuses).optional(),
+  severity: z.enum(alertSeverities).optional(),
+  targetId: uuid.optional(),
+  assetId: uuid.optional(),
+  incidentId: uuid.optional(),
+  search: z.string().trim().max(100).optional(),
+});
+
+export const alertAcknowledgeSchema = z.object({ note: z.string().trim().max(1000).optional() });
+export const alertResolveSchema = z.object({
+  resolutionNotes: z.string().trim().min(3).max(2000),
+});
+export const alertSuppressSchema = z.object({
+  reason: z.string().trim().min(3).max(500),
+  until: isoDate.nullish().transform((v) => v ?? null),
+});
+
+/* ---------- monitoring analytics ---------- */
+
+export const analyticsRangeQuery = z.object({
+  range: z.enum(["24h", "7d", "30d"]).default("24h"),
+});
+
+/* ---------- vulnerability import ---------- */
+
+export const trivyImportSchema = z.object({
+  assetId: uuid,
+  report: z.unknown(),
+});
+
+/* ---------- global search ---------- */
+
+export const searchQuerySchema = z.object({
+  q: z.string().trim().min(2, "Search requires at least two characters").max(100),
+  limit: z.coerce.number().int().min(1).max(25).default(5),
 });
 
 export const dashboardQuery = z.object({

@@ -27,6 +27,8 @@ export const collections = {
   notifications: "notifications",
   auditLogs: "audit_logs",
   workerStatuses: "worker_statuses",
+  alerts: "alerts",
+  scanImports: "scan_imports",
 } as const;
 
 export type InfraPilotCollectionName = (typeof collections)[keyof typeof collections];

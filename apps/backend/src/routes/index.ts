@@ -4,6 +4,7 @@ import { assetRoutes } from "@/controllers/assets.controller";
 import { monitoringRoutes } from "@/controllers/monitoring.controller";
 import { workRoutes } from "@/controllers/work.controller";
 import { opsRoutes } from "@/controllers/ops.controller";
+import { alertsRoutes } from "@/controllers/alerts.controller";
 import { getEnv } from "@/lib/env";
 import { ApiError, clientIp, errors, requestId, toErrorResponse } from "@/lib/http";
 import { logger } from "@/lib/logger";
@@ -17,6 +18,7 @@ const ROUTES: RouteDef[] = [
   ...assetRoutes,
   ...monitoringRoutes,
   ...workRoutes,
+  ...alertsRoutes,
   ...opsRoutes,
 ].sort((a, b) => b.path.split("/").filter((s) => !s.startsWith(":")).length - a.path.split("/").filter((s) => !s.startsWith(":")).length);
 
