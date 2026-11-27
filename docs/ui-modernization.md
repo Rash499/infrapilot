@@ -201,7 +201,7 @@ rules as `/search`), debounces 250 ms, aborts stale requests, shows grouped resu
 | `npm run lint` | 0 errors, 28 warnings (pre-existing `set-state-in-effect` advisories plus react-hook-form “compilation skipped” notices) |
 | `npm run typecheck` | Pass, all workspaces |
 | `npm run typecheck:demo` | Pass |
-| `npm test` | 198 passed, 9 skipped (integration suites need `MONGODB_URI`) |
+| `npm test` | 199 passed, 9 skipped (integration suites need `MONGODB_URI`) |
 | `npm run build` | Pass |
-| Playwright | **Not run locally** — no browser binaries and the download is blocked in this environment; the suite runs in CI |
+| Playwright | **Not run locally** — no browser binaries and the download is blocked in this environment. GitHub Actions: 21 passed, 0 failed on `112d3bf` |
 | Screenshots at 360/390/768/1024/1366/1920 px, light/dark | **Not captured** for the same reason. Responsiveness was handled through the existing breakpoints (`sm`/`md`/`lg`/`xl`), the mobile search panel and dialog bottom-sheet behaviour, and is exercised by the Playwright viewport default in CI |
