@@ -417,8 +417,8 @@ export function AppShell({ children }: { children: ReactNode }) {
             <Search className="pointer-events-none absolute left-2.5 top-2 size-3.5 text-muted" aria-hidden="true" />
             <input
               type="search"
-              aria-label="Search assets, alerts, incidents and more"
-              placeholder="Search…"
+              aria-label="Global search"
+              placeholder="Search workspace…"
               value={search}
               onChange={(event) => setSearch(event.target.value)}
               className="h-8 w-44 rounded-md border border-line bg-surface-2/60 pl-8 pr-2 text-xs text-fg placeholder:text-muted focus-visible:border-accent focus-visible:bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-ring lg:w-60"
