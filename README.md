@@ -239,7 +239,9 @@ suppression and recovery. Playwright covers the alert console, global search and
 - **End-to-end** — replica set, seed, demo idempotency/cleanup verification, build, Playwright.
 - **Code scanning** — CodeQL (`security-and-quality` queries).
 - **Secret scanning** — gitleaks on the full history.
-- **Dependency review** — high-severity advisories on pull requests.
+- **Dependency scanning** — `npm audit --omit=dev --audit-level=high` in the quality job. GitHub's
+  dependency-review API is not available to this repository's plan, so the action is deliberately not
+  used instead of being left failing or ignored.
 
 ## Security model
 

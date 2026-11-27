@@ -123,11 +123,11 @@ infrapilot.example.com {
    `npm run test:e2e` with backend, worker and frontend launched by Playwright.
 4. **Code scanning**: CodeQL with `security-and-quality` queries.
 5. **Secret scanning**: gitleaks across the full history.
-6. **Dependency review**: high-severity advisories on pull requests.
+6. **Dependency scanning**: `npm audit --omit=dev --audit-level=high` in the quality job (GitHub's
+   dependency-review API is unavailable for this repository's plan, so no failing action is configured).
 
 All actions are pinned to commit SHAs and every job declares only the permissions it needs
-(`contents: read` by default; `security-events: write` for CodeQL; `pull-requests: write` for dependency
-review).
+(`contents: read` by default; `security-events: write` for CodeQL).
 
 ## 7. Upgrades
 
