@@ -174,3 +174,26 @@ Time series use the selected range. Asset, service and finding figures are curre
 | --- | --- | --- | --- | --- | --- | --- |
 | GET | `/audit` | bearer | admin | `entityType`, `entityId`, `actorId`, pagination | 200 list | 403 |
 | GET | `/audit/:entityType/:entityId` | bearer | read | — | 200 entity history | 401 |
+
+
+## Alerting, analytics, security imports and search (added)
+
+| Method | Path | Permission | Notes |
+| --- | --- | --- | --- |
+| GET | `/api/v1/monitoring/analytics?range=24h\|7d\|30d` | read | Uptime windows, latency distribution (avg/min/max/p95/p99), trend, per-target stats. |
+| GET | `/api/v1/monitoring/targets/:id/analytics?range=…` | read | Same aggregates for one target. |
+| GET | `/api/v1/alerts` | read | Filters: `status`, `severity`, `targetId`, `assetId`, `incidentId`, `search`, pagination. |
+| GET | `/api/v1/alerts/summary` | read | Active counts by state/severity and a 14-day trend. |
+| GET | `/api/v1/alerts/:id` | read | Alert with lifecycle events and resolved actor names. |
+| POST | `/api/v1/alerts/:id/acknowledge` | write | Body `{ note? }`. |
+| POST | `/api/v1/alerts/:id/resolve` | write | Body `{ resolutionNotes }` (min 3 chars). |
+| POST | `/api/v1/alerts/:id/suppress` | write | Body `{ reason, until? }` (ISO date-time; defaults to +1 h). |
+| GET | `/api/v1/incidents/sla?days=90` | read | MTTA/MTTR, breaches, at-risk, severity counts, trend, policy text. |
+| POST | `/api/v1/incidents/:id/acknowledge` | write | Idempotent first acknowledgement. |
+| GET | `/api/v1/security/dashboard` | read | Open/overdue/due-soon findings, severity/status counts, top assets, 30-day trend. |
+| POST | `/api/v1/security/imports` | write | Body `{ assetId, report }`; Trivy JSON only; ≤ 2 MB; ≤ 1,000 vulnerabilities. |
+| GET | `/api/v1/security/imports/:assetId` | read | Recent import history for an asset. |
+| GET | `/api/v1/search?q=…&limit=5` | read | Grouped results; user group only for administrators. |
+
+Alert transitions are guarded by expected statuses and return `409 CONFLICT` when another actor changed
+the alert first. Dashboard and analytics values are MongoDB aggregations over stored records.

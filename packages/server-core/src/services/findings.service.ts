@@ -5,9 +5,13 @@ import {
   createSecurityFinding,
   deleteSecurityFinding,
   findSecurityFindingById,
+  getFindingMetrics,
+  insertScanImport,
   listFindingEvents,
+  listScanImports,
   listSecurityFindings,
   updateSecurityFinding,
+  upsertVulnerabilityFinding,
 } from "@/db/repositories/findings.repository";
 import { findUserById } from "@/db/repositories/users.repository";
 import type { AuthUser } from "@/lib/auth";
@@ -15,14 +19,21 @@ import { errors, paginationMeta } from "@/lib/http";
 import { notifyRoles, notifyUsers } from "@/services/notifications.service";
 import { recordAudit } from "@/services/audit.service";
 import { diffFields, humanize, iso, userNameMap } from "@/services/common";
-import type { findingCreateSchema, findingListQuery, findingUpdateSchema } from "@/validators/schemas";
+import {
+  REMEDIATION_DAYS,
+  TrivyParseError,
+  parseTrivyReport,
+  remediationDeadline,
+} from "../security/trivy";
+import type { findingCreateSchema, findingListQuery, findingUpdateSchema, trivyImportSchema } from "@/validators/schemas";
 
 type FindingRow = SecurityFindingDoc;
 type CreateInput = z.infer<typeof findingCreateSchema>;
+type TrivyImportInput = z.infer<typeof trivyImportSchema>;
 type UpdateInput = z.infer<typeof findingUpdateSchema>;
 type ListQuery = z.infer<typeof findingListQuery>;
 
-const TRACKED = ["title", "description", "severity", "assetId", "assigneeId", "remediation", "cveId", "status"] as const;
+const TRACKED = ["title", "description", "severity", "assetId", "assigneeId", "remediation", "cveId", "status", "cvssScore"] as const;
 
 async function assertActiveUser(userId: string | null | undefined): Promise<string | null> {
   if (!userId) return null;
@@ -49,6 +60,14 @@ function toDto(row: FindingRow, names: { asset: string | null; assignee: string 
     assigneeName: names.assignee,
     remediation: row.remediation,
     cveId: row.cveId,
+    cvssScore: row.cvssScore ?? null,
+    component: row.component ?? null,
+    installedVersion: row.installedVersion ?? null,
+    fixedVersion: row.fixedVersion ?? null,
+    remediationDeadline: iso(row.remediationDeadline ?? null),
+    source: row.source ?? "manual",
+    scanId: row.scanId ?? null,
+    lastSeenAt: iso(row.lastSeenAt ?? null),
     createdById: row.createdById,
     createdByName: names.creator,
     resolvedAt: iso(row.resolvedAt),
@@ -105,6 +124,7 @@ export async function getFinding(id: string) {
 export async function createFinding(actor: AuthUser, input: CreateInput, ip: string) {
   await assertAsset(input.assetId);
   await assertActiveUser(input.assigneeId);
+  const now = new Date();
   const row = await createSecurityFinding(
     {
       title: input.title,
@@ -114,6 +134,14 @@ export async function createFinding(actor: AuthUser, input: CreateInput, ip: str
       assigneeId: input.assigneeId,
       remediation: input.remediation,
       cveId: input.cveId,
+      cvssScore: input.cvssScore,
+      component: input.component ?? null,
+      installedVersion: input.installedVersion ?? null,
+      fixedVersion: input.fixedVersion ?? null,
+      remediationDeadline: remediationDeadline(input.severity, now),
+      source: "manual",
+      scanId: null,
+      lastSeenAt: now,
       createdById: actor.id,
     },
     actor.id,
@@ -163,7 +191,25 @@ export async function updateFinding(actor: AuthUser, id: string, input: UpdateIn
   const assigneeName = assigneeChanged ? await assertActiveUser(input.assigneeId) : null;
 
   const now = new Date();
-  const patch: Partial<Pick<SecurityFindingDoc, "title" | "description" | "severity" | "assetId" | "assigneeId" | "remediation" | "cveId" | "status" | "resolvedAt">> = {};
+  const patch: Partial<
+    Pick<
+      SecurityFindingDoc,
+      | "title"
+      | "description"
+      | "severity"
+      | "assetId"
+      | "assigneeId"
+      | "remediation"
+      | "cveId"
+      | "status"
+      | "resolvedAt"
+      | "cvssScore"
+      | "component"
+      | "installedVersion"
+      | "fixedVersion"
+      | "remediationDeadline"
+    >
+  > = {};
   if (input.title !== undefined) patch.title = input.title;
   if (input.description !== undefined) patch.description = input.description;
   if (input.severity !== undefined) patch.severity = input.severity;
@@ -171,6 +217,14 @@ export async function updateFinding(actor: AuthUser, id: string, input: UpdateIn
   if (input.assigneeId !== undefined) patch.assigneeId = input.assigneeId;
   if (input.remediation !== undefined) patch.remediation = input.remediation;
   if (input.cveId !== undefined) patch.cveId = input.cveId;
+  if (input.cvssScore !== undefined) patch.cvssScore = input.cvssScore;
+  if (input.component !== undefined) patch.component = input.component;
+  if (input.installedVersion !== undefined) patch.installedVersion = input.installedVersion;
+  if (input.fixedVersion !== undefined) patch.fixedVersion = input.fixedVersion;
+  if (input.severity !== undefined && input.severity !== before.severity) {
+    // Severity changes restart the remediation clock under the documented policy.
+    patch.remediationDeadline = remediationDeadline(input.severity, now);
+  }
   if (statusChanged && input.status) {
     patch.status = input.status;
     patch.resolvedAt = input.status === "resolved" ? now : null;
@@ -239,4 +293,146 @@ export async function deleteFinding(actor: AuthUser, id: string, ip: string): Pr
     summary: `Finding "${row.title}" deleted`,
     ip,
   });
+}
+
+/* ---------- security operations: Trivy report import ---------- */
+
+const MAX_VULNERABILITIES_PER_IMPORT = 1000;
+
+/**
+ * Imports a Trivy JSON report as findings for one asset.
+ *
+ * The upload is treated strictly as data: it is parsed, bounded (2 MB / 1000 vulnerabilities) and
+ * never executed. InfraPilot does not run Trivy itself, so findings reflect the report's scan time,
+ * not a live scan performed by this platform.
+ */
+export async function importTrivyReport(actor: AuthUser, input: TrivyImportInput, ip: string) {
+  const asset = await findAssetById(input.assetId);
+  if (!asset) throw errors.unprocessable("The selected asset does not exist");
+
+  let report;
+  try {
+    report = parseTrivyReport(input.report);
+  } catch (error) {
+    if (error instanceof TrivyParseError) throw errors.unprocessable(error.message);
+    throw error;
+  }
+  if (report.vulnerabilities.length > MAX_VULNERABILITIES_PER_IMPORT) {
+    throw errors.unprocessable(
+      `Report contains ${report.vulnerabilities.length} vulnerabilities; the limit per import is ${MAX_VULNERABILITIES_PER_IMPORT}. Split the report or import a filtered scan.`,
+    );
+  }
+
+  const now = new Date();
+  const scanId = crypto.randomUUID();
+  let created = 0;
+  let updated = 0;
+  let reopened = 0;
+  const skipped = report.skipped.length;
+
+  for (const vulnerability of report.vulnerabilities) {
+    const result = await upsertVulnerabilityFinding({
+      assetId: asset.id,
+      cveId: vulnerability.cveId,
+      component: vulnerability.component,
+      title: vulnerability.title,
+      description: vulnerability.description,
+      severity: vulnerability.severity,
+      cvssScore: vulnerability.cvssScore,
+      installedVersion: vulnerability.installedVersion,
+      fixedVersion: vulnerability.fixedVersion,
+      remediation: vulnerability.remediation,
+      remediationDeadline: remediationDeadline(vulnerability.severity, now),
+      scanId,
+      seenAt: now,
+      createdById: actor.id,
+    });
+    if (result.created) created += 1;
+    else updated += 1;
+    if (result.reopened) reopened += 1;
+  }
+
+  const scan = await insertScanImport({
+    assetId: asset.id,
+    scanner: "trivy",
+    artifactName: report.artifactName,
+    artifactType: report.artifactType,
+    reportVersion: report.schemaVersion,
+    importedById: actor.id,
+    vulnerabilitiesSeen: report.vulnerabilities.length,
+    findingsCreated: created,
+    findingsUpdated: updated,
+    findingsSkipped: skipped,
+    importedAt: now,
+  });
+
+  const critical = report.vulnerabilities.filter((row) => row.severity === "critical").length;
+  const high = report.vulnerabilities.filter((row) => row.severity === "high").length;
+
+  await recordAudit({
+    actorId: actor.id,
+    action: "finding.report_imported",
+    entityType: "asset",
+    entityId: asset.id,
+    summary: `Trivy report imported for ${asset.name}: ${created} new, ${updated} refreshed, ${reopened} reopened, ${skipped} skipped`,
+    metadata: { scanId, artifactName: report.artifactName, critical, high, source: "trivy" },
+    ip,
+  });
+
+  if (critical > 0) {
+    await notifyRoles(["admin", "operator"], {
+      type: "security_import",
+      title: `${critical} critical vulnerabilities imported`,
+      message: `${asset.name}: Trivy report ${report.artifactName} added ${created} findings.`,
+      link: `/security?assetId=${asset.id}`,
+    });
+  }
+
+  return {
+    scanId,
+    asset: { id: asset.id, name: asset.name },
+    scanner: "trivy" as const,
+    artifactName: report.artifactName,
+    artifactType: report.artifactType,
+    scannerVersion: report.scannerVersion,
+    scannedAt: iso(report.scannedAt),
+    importedAt: iso(scan.importedAt),
+    vulnerabilitiesSeen: report.vulnerabilities.length,
+    findingsCreated: created,
+    findingsUpdated: updated,
+    findingsSkipped: skipped,
+    findingsReopened: reopened,
+    criticalCount: critical,
+    highCount: high,
+    duplicateCount: report.duplicateCount,
+    skipped: report.skipped.slice(0, 25),
+    remediationPolicyDays: REMEDIATION_DAYS,
+  };
+}
+
+export async function securityDashboard() {
+  const metrics = await getFindingMetrics();
+  const topAssets = await findAssetNamesByIds(metrics.byAsset.map((row) => row.assetId));
+  const names = new Map(topAssets.map((row) => [row.id, row.name]));
+  const open = metrics.byStatus.filter((row) => row.status === "open" || row.status === "in_progress").reduce((sum, row) => sum + row.count, 0);
+  return {
+    ...metrics,
+    open,
+    topAssets: metrics.byAsset.map((row) => ({ id: row.assetId, name: names.get(row.assetId) ?? "Deleted asset", count: row.count })),
+  };
+}
+
+export async function scanHistory(assetId: string) {
+  const rows = await listScanImports(assetId);
+  return rows.map((row) => ({
+    id: row.id,
+    scanner: row.scanner,
+    artifactName: row.artifactName,
+    artifactType: row.artifactType,
+    vulnerabilitiesSeen: row.vulnerabilitiesSeen,
+    findingsCreated: row.findingsCreated,
+    findingsUpdated: row.findingsUpdated,
+    findingsSkipped: row.findingsSkipped,
+    importedAt: row.importedAt.toISOString(),
+  }));
 }

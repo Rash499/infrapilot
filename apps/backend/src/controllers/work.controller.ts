@@ -1,10 +1,21 @@
 import { authorize } from "@/lib/auth";
-import { jsonList, jsonOk, parseBody, parseQuery } from "@/lib/http";
-import { createFinding, deleteFinding, getFinding, listFindings, updateFinding } from "@/services/findings.service";
+import { errors, jsonList, jsonOk, parseBody, parseQuery } from "@/lib/http";
 import {
+  createFinding,
+  deleteFinding,
+  getFinding,
+  importTrivyReport,
+  listFindings,
+  scanHistory,
+  securityDashboard,
+  updateFinding,
+} from "@/services/findings.service";
+import {
+  acknowledgeIncident,
   addIncidentComment,
   createIncident,
   getIncident,
+  incidentSlaMetrics,
   incidentStats,
   listIncidents,
   updateIncident,
@@ -33,6 +44,7 @@ import {
   maintenanceListQuery,
   maintenanceUpdateSchema,
   statsQuery,
+  trivyImportSchema,
 } from "@/validators/schemas";
 import {
   createChange,
@@ -44,6 +56,7 @@ import {
   updateChange,
 } from "@/services/changes.service";
 import type { RouteDef } from "@/routes/types";
+import { TRIVY_MAX_REPORT_BYTES } from "../../../../packages/server-core/src/security/trivy";
 
 export const workRoutes: RouteDef[] = [
   /* ---------- security findings ---------- */
@@ -90,6 +103,38 @@ export const workRoutes: RouteDef[] = [
     },
   },
 
+  {
+    method: "GET",
+    path: "security/dashboard",
+    handler: async ({ req }) => {
+      await authorize(req, "read");
+      return jsonOk(await securityDashboard());
+    },
+  },
+  {
+    method: "GET",
+    path: "security/imports/:assetId",
+    handler: async ({ req, params }) => {
+      await authorize(req, "read");
+      return jsonOk(await scanHistory(params.assetId!));
+    },
+  },
+  {
+    method: "POST",
+    path: "security/imports",
+    handler: async ({ req, ip }) => {
+      const user = await authorize(req, "write");
+      const body = await parseBody(req, trivyImportSchema);
+      const bytes = Buffer.byteLength(JSON.stringify(body.report ?? null), "utf8");
+      if (bytes > TRIVY_MAX_REPORT_BYTES) {
+        throw errors.payloadTooLarge(
+          `Trivy report is ${Math.round(bytes / 1024)} KB; the limit is ${Math.round(TRIVY_MAX_REPORT_BYTES / 1024)} KB`,
+        );
+      }
+      return jsonOk(await importTrivyReport(user, body, ip), { status: 201 });
+    },
+  },
+
   /* ---------- incidents ---------- */
   {
     method: "GET",
@@ -119,10 +164,27 @@ export const workRoutes: RouteDef[] = [
   },
   {
     method: "GET",
+    path: "incidents/sla",
+    handler: async ({ req }) => {
+      await authorize(req, "read");
+      const { days } = parseQuery(req, statsQuery);
+      return jsonOk(await incidentSlaMetrics(days));
+    },
+  },
+  {
+    method: "GET",
     path: "incidents/:id",
     handler: async ({ req, params }) => {
       await authorize(req, "read");
       return jsonOk(await getIncident(params.id!));
+    },
+  },
+  {
+    method: "POST",
+    path: "incidents/:id/acknowledge",
+    handler: async ({ req, ip, params }) => {
+      const user = await authorize(req, "write");
+      return jsonOk(await acknowledgeIncident(user, params.id!, ip));
     },
   },
   {

@@ -9,3 +9,5 @@ export * from "./findings.repository";
 export * from "./counters.repository";
 export * from "./incidents.repository";
 export * from "./changes.repository";
+
+export * from "./alerts.repository";

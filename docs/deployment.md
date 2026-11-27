@@ -114,12 +114,20 @@ infrapilot.example.com {
 
 `.github/workflows/ci.yml` runs on every push to `main` and on pull requests:
 
-1. `npm ci`
-2. `npm run lint`
-3. `npx next typegen` and `npx tsc --noEmit`
-4. `npm test` (unit, component and probe tests)
-5. `npm run build`
-6. End-to-end job: start a MongoDB `rs0` replica set, bootstrap collections, seed, build, and run `npm run test:e2e` with backend, worker, and frontend launched by Playwright.
+1. **Quality**: `npm ci`, `npm run lint`, `npx next typegen` + `npm run typecheck`, `npm test`,
+   `npm audit --omit=dev --audit-level=high`, `npm run build`.
+2. **MongoDB integration**: start an `rs0` replica set, `npm run db:init:mongo`, `npm run test:integration`
+   (alert deduplication, worker leases, the full probe → alert → incident pipeline), then boot the worker
+   and assert `/health/live`.
+3. **End-to-end**: same replica set, bootstrap + seed, demo idempotency/cleanup verification, build, and
+   `npm run test:e2e` with backend, worker and frontend launched by Playwright.
+4. **Code scanning**: CodeQL with `security-and-quality` queries.
+5. **Secret scanning**: gitleaks across the full history.
+6. **Dependency scanning**: `npm audit --omit=dev --audit-level=high` in the quality job (GitHub's
+   dependency-review API is unavailable for this repository's plan, so no failing action is configured).
+
+All actions are pinned to commit SHAs and every job declares only the permissions it needs
+(`contents: read` by default; `security-events: write` for CodeQL).
 
 ## 7. Upgrades
 

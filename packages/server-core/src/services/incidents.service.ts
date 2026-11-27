@@ -1,6 +1,7 @@
 import type { z } from "zod";
 import type { IncidentDoc } from "@/db/models/documents";
 import {
+  acknowledgeIncident as acknowledgeIncidentRow,
   createIncident as createMongoIncident,
   findIncidentById,
   getIncidentStats,
@@ -8,8 +9,13 @@ import {
   listIncidentAssets,
   listIncidentComments,
   listIncidents as listMongoIncidents,
+  listIncidentsForMetrics,
   updateIncident as updateMongoIncident,
 } from "@/db/repositories/incidents.repository";
+import { findAlertByIncidentId } from "@/db/repositories/alerts.repository";
+import { listChangeRequestsForAssets } from "@/db/repositories/changes.repository";
+import { listOpenFindingsForAssets } from "@/db/repositories/findings.repository";
+import { computeIncidentSla, summarizeIncidents } from "../monitoring/sla";
 import { findUserById } from "@/db/repositories/users.repository";
 import type { AuthUser } from "@/lib/auth";
 import { errors, paginationMeta } from "@/lib/http";
@@ -52,6 +58,12 @@ function toDto(row: IncidentRow, names: Map<string, string>) {
     assigneeName: row.assigneeId ? names.get(row.assigneeId) ?? null : null,
     reporterId: row.reporterId,
     reporterName: row.reporterId ? names.get(row.reporterId) ?? null : null,
+    category: row.category ?? null,
+    impact: row.impact ?? null,
+    urgency: row.urgency ?? null,
+    acknowledgedAt: iso(row.acknowledgedAt ?? null),
+    autoCreated: row.autoCreated === true,
+    sourceAlertId: row.sourceAlertId ?? null,
     rootCause: row.rootCause,
     resolution: row.resolution,
     openedAt: row.openedAt.toISOString(),
@@ -79,18 +91,79 @@ export async function getIncident(id: string) {
     listIncidentAssets(id),
     listIncidentComments(id),
   ]);
+  const assetIds = affected.map((asset) => asset.id);
+  const [alert, changes, findings] = await Promise.all([
+    findAlertByIncidentId(id),
+    listChangeRequestsForAssets(assetIds),
+    listOpenFindingsForAssets(assetIds),
+  ]);
   const authors = await userNameMap(comments.map((comment) => comment.authorId));
+  type TimelineEntry = {
+    id: string;
+    kind: string;
+    body: string;
+    authorId: string | null;
+    authorName: string;
+    createdAt: string;
+    source: "comment" | "alert" | "change" | "finding";
+    href?: string;
+  };
+  const timeline: TimelineEntry[] = comments.map((comment) => ({
+    id: comment.id,
+    kind: comment.kind,
+    body: comment.body,
+    authorId: comment.authorId,
+    authorName: comment.authorId ? authors.get(comment.authorId) ?? "System" : "System",
+    createdAt: comment.createdAt.toISOString(),
+    source: "comment",
+  }));
+  if (alert) {
+    for (const event of alert.events) {
+      timeline.push({
+        id: `${alert.id}:${event.at.toISOString()}:${event.type}`,
+        kind: "system",
+        body: `Monitoring alert "${alert.title}" — ${humanize(event.type)}${event.note ? `: ${event.note}` : ""}`,
+        authorId: event.actorId,
+        authorName: event.actorId ? authors.get(event.actorId) ?? "User" : "Monitoring",
+        createdAt: event.at.toISOString(),
+        source: "alert",
+        href: "/alerts",
+      });
+    }
+  }
+  for (const change of changes.slice(0, 10)) {
+    timeline.push({
+      id: `change:${change.id}`,
+      kind: "system",
+      body: `Change request #${change.number} "${change.title}" (${humanize(change.status)}, risk ${humanize(change.riskLevel)}) affects an impacted asset`,
+      authorId: change.requesterId,
+      authorName: change.requesterId ? authors.get(change.requesterId) ?? "User" : "Change management",
+      createdAt: (change.implementedAt ?? change.plannedStartAt ?? change.createdAt).toISOString(),
+      source: "change",
+      href: "/changes",
+    });
+  }
+  for (const finding of findings.slice(0, 10)) {
+    timeline.push({
+      id: `finding:${finding.id}`,
+      kind: "system",
+      body: `Open security finding (${humanize(finding.severity)}) ${finding.title}${finding.component ? ` in ${finding.component}` : ""}`,
+      authorId: finding.createdById,
+      authorName: finding.createdById ? authors.get(finding.createdById) ?? "User" : "Security",
+      createdAt: finding.createdAt.toISOString(),
+      source: "finding",
+      href: "/security",
+    });
+  }
+  timeline.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   return {
     ...toDto(row, names),
     assets: affected,
-    timeline: comments.map((comment) => ({
-      id: comment.id,
-      kind: comment.kind,
-      body: comment.body,
-      authorId: comment.authorId,
-      authorName: comment.authorId ? authors.get(comment.authorId) ?? "System" : "System",
-      createdAt: comment.createdAt.toISOString(),
-    })),
+    sla: computeIncidentSla(row, new Date()),
+    monitoringAlert: alert
+      ? { id: alert.id, status: alert.status, severity: alert.severity, title: alert.title, triggeredAt: alert.triggeredAt.toISOString() }
+      : null,
+    timeline,
   };
 }
 
@@ -140,7 +213,25 @@ export async function updateIncident(actor: AuthUser, id: string, input: UpdateI
   if (input.assetIds) await assertAssetsExist(input.assetIds);
 
   const now = new Date();
-  const patch: Partial<Pick<IncidentDoc, "title" | "description" | "severity" | "priority" | "assigneeId" | "rootCause" | "resolution" | "status" | "resolvedAt" | "closedAt">> = {};
+  const patch: Partial<
+    Pick<
+      IncidentDoc,
+      | "title"
+      | "description"
+      | "severity"
+      | "priority"
+      | "assigneeId"
+      | "rootCause"
+      | "resolution"
+      | "status"
+      | "resolvedAt"
+      | "closedAt"
+      | "acknowledgedAt"
+      | "category"
+      | "impact"
+      | "urgency"
+    >
+  > = {};
   if (input.title !== undefined) patch.title = input.title;
   if (input.description !== undefined) patch.description = input.description;
   if (input.severity !== undefined) patch.severity = input.severity;
@@ -148,6 +239,13 @@ export async function updateIncident(actor: AuthUser, id: string, input: UpdateI
   if (input.assigneeId !== undefined) patch.assigneeId = input.assigneeId;
   if (input.rootCause !== undefined) patch.rootCause = input.rootCause;
   if (input.resolution !== undefined) patch.resolution = input.resolution;
+  if (input.category !== undefined) patch.category = input.category;
+  if (input.impact !== undefined) patch.impact = input.impact;
+  if (input.urgency !== undefined) patch.urgency = input.urgency;
+  if (statusChanged && nextStatus !== "open" && !before.acknowledgedAt) {
+    // Moving an incident out of "open" counts as the first acknowledgement for MTTA/SLA purposes.
+    patch.acknowledgedAt = now;
+  }
   if (statusChanged) {
     patch.status = nextStatus;
     patch.resolvedAt = nextStatus === "resolved" ? now : nextStatus === "closed" ? (before.resolvedAt ?? now) : null;
@@ -252,5 +350,46 @@ export async function incidentStats(days: number) {
     activeCount: stats.byStatus
       .filter((row) => (ACTIVE_STATUSES as readonly string[]).includes(row._id))
       .reduce((total, row) => total + row.count, 0),
+  };
+}
+
+/** Explicit acknowledgement endpoint; idempotent so repeat calls do not distort MTTA. */
+export async function acknowledgeIncident(actor: AuthUser, id: string, ip: string) {
+  const before = await findIncidentById(id);
+  if (!before) throw errors.notFound("Incident");
+  if (before.acknowledgedAt) return getIncident(id);
+  const now = new Date();
+  const row = await acknowledgeIncidentRow(id, now);
+  if (!row) return getIncident(id);
+  await insertIncidentComment(id, {
+    authorId: actor.id,
+    kind: "system",
+    body: `Acknowledged by ${actor.name}`,
+  });
+  await recordAudit({
+    actorId: actor.id,
+    action: "incident.acknowledged",
+    entityType: "incident",
+    entityId: id,
+    summary: `${incidentReference(before.number)} acknowledged`,
+    ip,
+  });
+  return getIncident(id);
+}
+
+/** SLA and throughput metrics. Open incidents contribute to open/breach counts but never to MTTR. */
+export async function incidentSlaMetrics(days: number) {
+  const since = new Date(Date.now() - days * DAY_MS);
+  const rows = await listIncidentsForMetrics(since);
+  const metrics = summarizeIncidents(rows, new Date());
+  return {
+    ...metrics,
+    days,
+    policy: {
+      p1: "Acknowledge 15 min / resolve 4 h",
+      p2: "Acknowledge 30 min / resolve 8 h",
+      p3: "Acknowledge 2 h / resolve 24 h",
+      p4: "Acknowledge 8 h / resolve 72 h",
+    },
   };
 }

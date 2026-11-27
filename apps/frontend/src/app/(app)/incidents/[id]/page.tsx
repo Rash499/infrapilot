@@ -85,6 +85,7 @@ export default function IncidentDetailPage() {
   const users = useAsync(() => fetchData<UserOption[]>("/users/options"), []);
   const [comment, setComment] = useState("");
   const [posting, setPosting] = useState(false);
+  const [acknowledging, setAcknowledging] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const {
     register,
@@ -203,8 +204,17 @@ export default function IncidentDetailPage() {
                         id: t.id,
                         title: <span className={cn(t.kind === "system" && "text-muted")}>{t.body}</span>,
                         meta: fmtRelative(t.createdAt),
-                        body: `${t.kind === "comment" ? (t.authorName ?? "Comment") : "System"} · ${fmtDateTime(t.createdAt)}`,
-                        tone: t.kind === "system" ? ("neutral" as const) : ("info" as const),
+                        body: `${t.source === "alert" ? "Monitoring" : t.source === "change" ? "Change management" : t.source === "finding" ? "Security" : t.kind === "comment" ? (t.authorName ?? "Comment") : "System"} · ${fmtDateTime(t.createdAt)}`,
+                        tone:
+                          t.source === "alert"
+                            ? ("warning" as const)
+                            : t.source === "finding"
+                              ? ("danger" as const)
+                              : t.source === "change"
+                                ? ("info" as const)
+                                : t.kind === "system"
+                                  ? ("neutral" as const)
+                                  : ("info" as const),
                       }))}
                     />
                   )}
@@ -232,6 +242,64 @@ export default function IncidentDetailPage() {
             </div>
 
             <div className="space-y-6">
+              {i.sla ? (
+                <Card>
+                  <CardHeader
+                    title="Service level"
+                    description={i.autoCreated ? "Opened automatically by monitoring" : "Targets derive from priority"}
+                    action={<StatusBadge value={i.sla.state.replace("_", "-")} />}
+                  />
+                  <div className="space-y-3 px-4 py-4 text-sm">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-muted">Acknowledge by</span>
+                      <span className={cn("tabular-nums", i.sla.acknowledgeBreached ? "font-medium text-rose-500" : "text-fg")}>
+                        {fmtDateTime(i.sla.acknowledgeDueAt)}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-muted">Resolve by</span>
+                      <span className={cn("tabular-nums", i.sla.resolveBreached ? "font-medium text-rose-500" : "text-fg")}>
+                        {fmtDateTime(i.sla.resolveDueAt)}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-muted">Acknowledged</span>
+                      <span className="tabular-nums text-fg">
+                        {i.sla.acknowledgedAt ? `${fmtDateTime(i.sla.acknowledgedAt)}${i.sla.minutesToAcknowledge !== null ? ` (${i.sla.minutesToAcknowledge} min)` : ""}` : "Pending"}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-muted">Resolved</span>
+                      <span className="tabular-nums text-fg">
+                        {i.sla.resolvedAt ? `${fmtDateTime(i.sla.resolvedAt)}${i.sla.minutesToResolve !== null ? ` (${i.sla.minutesToResolve} min)` : ""}` : "Not resolved"}
+                      </span>
+                    </div>
+                    {editable && !i.sla.acknowledgedAt && i.status !== "resolved" && i.status !== "closed" ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={acknowledging}
+                        loading={acknowledging}
+                        onClick={async () => {
+                          setAcknowledging(true);
+                          try {
+                            await sendData("post", `/incidents/${id}/acknowledge`);
+                            toast.success("Incident acknowledged");
+                            incident.reload();
+                          } catch (err) {
+                            toast.error(getErrorMessage(err));
+                          } finally {
+                            setAcknowledging(false);
+                          }
+                        }}
+                      >
+                        Acknowledge now
+                      </Button>
+                    ) : null}
+                  </div>
+                </Card>
+              ) : null}
+
               <Card>
                 <CardHeader title="Manage incident" description={editable ? "Changes are recorded in the timeline" : "Read-only access"} />
                 {editable ? (

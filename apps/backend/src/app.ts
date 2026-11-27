@@ -20,7 +20,8 @@ app.use((req, res, next) => {
   res.locals.requestId = requestId;
   next();
 });
-app.use(express.json({ limit: "1mb" }));
+// 4 MB accommodates Trivy JSON reports (the import endpoint enforces its own 2 MB limit).
+app.use(express.json({ limit: "4mb" }));
 app.use(cors({
   origin(origin, callback) {
     const allowed = (process.env.FRONTEND_ORIGIN ?? process.env.APP_ORIGIN ?? "http://localhost:3000").split(",");

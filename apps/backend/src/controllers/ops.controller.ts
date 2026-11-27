@@ -7,10 +7,19 @@ import {
   markAllNotificationsRead,
   markNotificationRead,
 } from "@/services/notifications.service";
-import { auditListQuery, dashboardQuery, notificationListQuery } from "@/validators/schemas";
+import { globalSearch } from "@/services/search.service";
+import { auditListQuery, dashboardQuery, notificationListQuery, searchQuerySchema } from "@/validators/schemas";
 import type { RouteDef } from "@/routes/types";
 
 export const opsRoutes: RouteDef[] = [
+  {
+    method: "GET",
+    path: "search",
+    handler: async ({ req }) => {
+      const user = await authorize(req, "read");
+      return jsonOk(await globalSearch(user, parseQuery(req, searchQuerySchema)));
+    },
+  },
   {
     method: "GET",
     path: "notifications",

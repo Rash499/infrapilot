@@ -316,6 +316,11 @@ function monitorInput(spec: DemoMonitorSpec, assetId: string) {
     intervalSeconds: spec.intervalSeconds,
     timeoutMs: spec.timeoutMs,
     degradedThresholdMs: spec.degradedThresholdMs,
+    failureThreshold: 3,
+    recoveryThreshold: 2,
+    warningThresholdMs: spec.degradedThresholdMs,
+    criticalThresholdMs: Math.max(spec.degradedThresholdMs * 5, 5000),
+    autoIncidentEnabled: true,
     enabled: spec.enabled,
     allowPrivateNetwork: true,
     assetId,
@@ -360,6 +365,7 @@ async function seedMonitoring(args: Args, registry: Registry, now: Date): Promis
     await updateMonitoringTargetAfterCheck(targetId, {
       status: spec.state,
       consecutiveFailures: spec.consecutiveFailures,
+      consecutiveSuccesses: spec.state === "healthy" ? 3 : 0,
       // A target without history has genuinely never been checked.
       lastCheckedAt: history.length > 0 ? at(now, 0.25) : null,
       lastResponseMs: history.length > 0 ? spec.lastResponseMs : null,

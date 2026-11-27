@@ -108,7 +108,8 @@ export async function listIncidentComments(incidentId: string): Promise<Incident
 }
 
 export async function createIncident(
-  input: Pick<IncidentDoc, "title" | "description" | "severity" | "priority" | "assigneeId">,
+  input: Pick<IncidentDoc, "title" | "description" | "severity" | "priority" | "assigneeId"> &
+    Partial<Pick<IncidentDoc, "category" | "impact" | "urgency">>,
   actorId: string,
   actorName: string,
   assetIds: string[],
@@ -157,7 +158,25 @@ export interface IncidentCommentInput {
 
 export async function updateIncident(
   id: string,
-  patch: Partial<Pick<IncidentDoc, "title" | "description" | "severity" | "priority" | "status" | "assigneeId" | "rootCause" | "resolution" | "resolvedAt" | "closedAt">>,
+  patch: Partial<
+    Pick<
+      IncidentDoc,
+      | "title"
+      | "description"
+      | "severity"
+      | "priority"
+      | "status"
+      | "assigneeId"
+      | "rootCause"
+      | "resolution"
+      | "resolvedAt"
+      | "closedAt"
+      | "acknowledgedAt"
+      | "category"
+      | "impact"
+      | "urgency"
+    >
+  >,
   assetIds: string[] | undefined,
   commentsToAdd: IncidentCommentInput[],
 ): Promise<IncidentDoc | null> {
@@ -238,4 +257,111 @@ export async function getIncidentStats(since: Date): Promise<{
     openedByDay,
     meanTimeToResolveHours: mttr?.hours ?? null,
   };
+}
+
+export async function findIncidentBySourceAlertId(sourceAlertId: string): Promise<IncidentDoc | null> {
+  const col = await getCollection<IncidentDoc>(collections.incidents);
+  return col.findOne({ sourceAlertId });
+}
+
+/**
+ * Creates an incident from an alert. The unique sparse index on `sourceAlertId` guarantees a single
+ * incident per alert even if two workers evaluate the same condition concurrently, in which case the
+ * duplicate-key error is translated to `null`.
+ */
+export async function createAutoIncident(input: {
+  title: string;
+  description: string;
+  severity: IncidentDoc["severity"];
+  priority: IncidentDoc["priority"];
+  sourceAlertId: string;
+  sourceMonitoringTargetId: string;
+  assetIds: string[];
+  category: string;
+}): Promise<IncidentDoc | null> {
+  const number = await nextSequenceValue("incident_number");
+  try {
+    return await withMongoTransaction(async (session) => {
+      const now = new Date();
+      const doc: IncidentDoc = {
+        ...newEntityIds(),
+        number,
+        title: input.title.slice(0, 200),
+        description: input.description.slice(0, 5000),
+        severity: input.severity,
+        priority: input.priority,
+        status: "open",
+        assigneeId: null,
+        reporterId: null,
+        category: input.category,
+        impact: "service unavailable",
+        urgency: input.priority === "p1" ? "critical" : "high",
+        acknowledgedAt: null,
+        sourceAlertId: input.sourceAlertId,
+        sourceMonitoringTargetId: input.sourceMonitoringTargetId,
+        autoCreated: true,
+        rootCause: null,
+        resolution: null,
+        openedAt: now,
+        resolvedAt: null,
+        closedAt: null,
+        createdAt: now,
+        updatedAt: now,
+      };
+      const incidents = await getCollection<IncidentDoc>(collections.incidents);
+      const links = await getCollection<IncidentAssetDoc>(collections.incidentAssets);
+      const comments = await getCollection<IncidentCommentDoc>(collections.incidentComments);
+      await incidents.insertOne(doc, { session });
+      if (input.assetIds.length > 0) {
+        await links.insertMany(
+          input.assetIds.map((assetId) => ({ ...newEntityIds(), incidentId: doc.id, assetId })),
+          { session },
+        );
+      }
+      await comments.insertOne(
+        {
+          ...newEntityIds(),
+          incidentId: doc.id,
+          authorId: null,
+          kind: "system",
+          body: `Incident opened automatically by monitoring (${input.priority.toUpperCase()}, ${input.severity}).`,
+          createdAt: now,
+        },
+        { session },
+      );
+      return doc;
+    });
+  } catch (error) {
+    if ((error as { code?: number }).code === 11000) return null;
+    throw error;
+  }
+}
+
+/** Records the first acknowledgement; later calls are no-ops so MTTA stays stable. */
+export async function acknowledgeIncident(id: string, now = new Date()): Promise<IncidentDoc | null> {
+  const col = await getCollection<IncidentDoc>(collections.incidents);
+  return col.findOneAndUpdate(
+    { id, $or: [{ acknowledgedAt: null }, { acknowledgedAt: { $exists: false } }] } as never,
+    { $set: { acknowledgedAt: now, updatedAt: now } },
+    { returnDocument: "after" },
+  );
+}
+
+export async function listIncidentsForMetrics(since?: Date): Promise<IncidentDoc[]> {
+  const col = await getCollection<IncidentDoc>(collections.incidents);
+  const filter = since ? { openedAt: { $gte: since } } : {};
+  return col
+    .find(filter, {
+      projection: {
+        priority: 1,
+        severity: 1,
+        status: 1,
+        openedAt: 1,
+        acknowledgedAt: 1,
+        resolvedAt: 1,
+      },
+    })
+    .sort({ openedAt: -1 })
+    .limit(5000)
+    .toArray();
 }

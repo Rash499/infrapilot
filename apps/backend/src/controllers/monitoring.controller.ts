@@ -6,11 +6,19 @@ import {
   getTarget,
   listResults,
   listTargets,
+  monitoringAnalytics,
   monitoringOverview,
   queueCheck,
+  targetAnalytics,
   updateTarget,
 } from "@/services/monitoring.service";
-import { monitorCreateSchema, monitorListQuery, monitorUpdateSchema, resultsQuery } from "@/validators/schemas";
+import {
+  analyticsRangeQuery,
+  monitorCreateSchema,
+  monitorListQuery,
+  monitorUpdateSchema,
+  resultsQuery,
+} from "@/validators/schemas";
 import type { RouteDef } from "@/routes/types";
 
 export const monitoringRoutes: RouteDef[] = [
@@ -20,6 +28,24 @@ export const monitoringRoutes: RouteDef[] = [
     handler: async ({ req }) => {
       await authorize(req, "read");
       return jsonOk(await monitoringOverview());
+    },
+  },
+  {
+    method: "GET",
+    path: "monitoring/analytics",
+    handler: async ({ req }) => {
+      await authorize(req, "read");
+      const { range } = parseQuery(req, analyticsRangeQuery);
+      return jsonOk(await monitoringAnalytics(range));
+    },
+  },
+  {
+    method: "GET",
+    path: "monitoring/targets/:id/analytics",
+    handler: async ({ req, params }) => {
+      await authorize(req, "read");
+      const { range } = parseQuery(req, analyticsRangeQuery);
+      return jsonOk(await targetAnalytics(params.id!, range));
     },
   },
   {

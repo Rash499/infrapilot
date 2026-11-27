@@ -6,11 +6,19 @@ import { getEnv } from "@/lib/env";
 import { logger } from "@/lib/logger";
 import { sendMaintenanceReminders } from "@/services/maintenance.service";
 import { notifyRoles, notifyUsers } from "@/services/notifications.service";
-import { computeState, rollupAssetStatus, runProbe, type ServiceState } from "@infrapilot/server-core";
+import {
+  computeState,
+  effectiveThresholds,
+  processCheckAlerts,
+  rollupAssetStatus,
+  runProbe,
+  type ServiceState,
+} from "@infrapilot/server-core";
 import {
   claimDueMonitoringTargets,
   pruneMonitoringResults,
   recordMonitoringCheck,
+  releaseMonitoringClaim,
   findAssetByIdForMonitoring,
 } from "@/db/repositories/monitoring.repository";
 
@@ -83,44 +91,79 @@ async function rollupAsset(assetId: string): Promise<void> {
   }
 }
 
-/** Runs one probe for a claimed target, stores the result, updates state, and emits notifications. */
+/**
+ * Runs one check, persists the result, evaluates alerts and releases the lease.
+ *
+ * Alert evaluation is delegated to `processCheckAlerts`, which owns deduplication, threshold
+ * classification, maintenance suppression and automatic incident creation. The lease is released in
+ * `finally` so a failing check never blocks the next schedule until expiry.
+ */
 export async function executeCheck(target: TargetRow): Promise<void> {
   const env = getEnv();
-  const result = await runProbe({
-    monitorType: target.monitorType,
-    url: target.url,
-    host: target.host,
-    port: target.port,
-    expectedStatusCode: target.expectedStatusCode,
-    timeoutMs: target.timeoutMs,
-    allowPrivateNetwork: target.allowPrivateNetwork,
-  });
-  const next = computeState(
-    { status: target.status, consecutiveFailures: target.consecutiveFailures },
-    result,
-    { failureThreshold: env.MONITOR_FAILURE_THRESHOLD, degradedThresholdMs: target.degradedThresholdMs },
-  );
-  const now = new Date();
-  await recordMonitoringCheck(
-    target.id,
-    {
-      checkedAt: now,
-      success: result.success,
+  try {
+    const result = await runProbe({
+      monitorType: target.monitorType,
+      url: target.url,
+      host: target.host,
+      port: target.port,
+      expectedStatusCode: target.expectedStatusCode,
+      timeoutMs: target.timeoutMs,
+      allowPrivateNetwork: target.allowPrivateNetwork,
+    });
+    const thresholds = effectiveThresholds(target, {
+      failureThreshold: env.MONITOR_FAILURE_THRESHOLD,
+      recoveryThreshold: env.MONITOR_RECOVERY_THRESHOLD,
+      warningThresholdMs: env.MONITOR_WARNING_THRESHOLD_MS,
+      criticalThresholdMs: env.MONITOR_CRITICAL_THRESHOLD_MS,
+    });
+    const previousState = target.status;
+    const next = computeState(
+      { status: target.status, consecutiveFailures: target.consecutiveFailures },
+      result,
+      { failureThreshold: thresholds.failureThreshold, degradedThresholdMs: thresholds.warningThresholdMs },
+    );
+    const now = new Date();
+    const consecutiveSuccesses = result.success ? (target.consecutiveSuccesses ?? 0) + 1 : 0;
+    await recordMonitoringCheck(
+      target.id,
+      {
+        checkedAt: now,
+        success: result.success,
+        state: next.status,
+        responseTimeMs: result.responseTimeMs,
+        statusCode: result.statusCode,
+        errorMessage: result.errorMessage,
+      },
+      {
+        status: next.status,
+        consecutiveFailures: next.consecutiveFailures,
+        consecutiveSuccesses,
+        lastCheckedAt: now,
+        lastResponseMs: result.responseTimeMs,
+        lastError: result.errorMessage,
+      },
+    );
+    await processCheckAlerts({
+      target,
+      assetId: target.assetId,
+      previousState,
       state: next.status,
-      responseTimeMs: result.responseTimeMs,
-      statusCode: result.statusCode,
-      errorMessage: result.errorMessage,
-    },
-    {
-      status: next.status,
       consecutiveFailures: next.consecutiveFailures,
-      lastCheckedAt: now,
-      lastResponseMs: result.responseTimeMs,
+      consecutiveSuccesses,
+      responseTimeMs: result.responseTimeMs,
       lastError: result.errorMessage,
-    },
-  );
-  await handleTransition(target, next.status);
-  if (target.assetId) await rollupAsset(target.assetId);
+      now,
+    });
+    await handleTransition(target, next.status);
+    if (target.assetId) await rollupAsset(target.assetId);
+  } finally {
+    await releaseMonitoringClaim(target.id).catch((error: unknown) => {
+      logger.warn("monitor_claim_release_failed", {
+        targetId: target.id,
+        error: error instanceof Error ? error.message : "unknown",
+      });
+    });
+  }
 }
 
 async function runWithConcurrency<T>(items: T[], limit: number, worker: (item: T) => Promise<void>): Promise<void> {

@@ -1,10 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import {
   Activity,
   Bell,
+  BellRing,
   CalendarClock,
   ChevronDown,
   ChevronRight,
@@ -15,6 +16,7 @@ import {
   Moon,
   PanelLeftClose,
   PanelLeftOpen,
+  Search,
   Server,
   Settings,
   ShieldAlert,
@@ -57,6 +59,7 @@ const NAV_GROUPS: NavGroup[] = [
   {
     label: "Operations",
     items: [
+      { href: "/alerts", label: "Alerts", icon: BellRing },
       { href: "/incidents", label: "Incidents", icon: Siren },
       { href: "/maintenance", label: "Maintenance", icon: CalendarClock },
       { href: "/changes", label: "Change management", icon: GitPullRequest },
@@ -97,7 +100,9 @@ const SIDEBAR_STORAGE_KEY = "infrapilot-sidebar-collapsed";
 
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
+  const router = useRouter();
   const { user, signOut } = useAuth();
+  const [search, setSearch] = useState("");
   const { theme, toggle } = useTheme();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
@@ -399,6 +404,26 @@ export function AppShell({ children }: { children: ReactNode }) {
               })}
             </ol>
           </nav>
+
+          <form
+            role="search"
+            className="relative hidden shrink-0 md:block"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const term = search.trim();
+              if (term.length >= 2) router.push(`/search?q=${encodeURIComponent(term)}`);
+            }}
+          >
+            <Search className="pointer-events-none absolute left-2.5 top-2 size-3.5 text-muted" aria-hidden="true" />
+            <input
+              type="search"
+              aria-label="Global search"
+              placeholder="Search workspace…"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              className="h-8 w-44 rounded-md border border-line bg-surface-2/60 pl-8 pr-2 text-xs text-fg placeholder:text-muted focus-visible:border-accent focus-visible:bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-ring lg:w-60"
+            />
+          </form>
 
           <div className="flex shrink-0 items-center gap-1">
             <Link
