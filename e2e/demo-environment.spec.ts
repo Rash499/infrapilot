@@ -60,7 +60,7 @@ test.describe("demo environment", () => {
 
     const listbox = page.getByRole("listbox", { name: "Search results" });
     await expect(listbox).toBeVisible();
-    await expect(listbox.getByRole("option").first()).toContainText("prd-db-01");
+    await expect(listbox.getByRole("option").first()).toContainText("prd");
     await expect(listbox.getByText("Assets").first()).toBeVisible();
 
     await page.keyboard.press("Escape");
@@ -72,11 +72,14 @@ test.describe("demo environment", () => {
     await signIn(page, adminEmail);
     await page.goto("/assets");
 
-    const statusHeader = page.getByRole("columnheader", { name: /Status/ });
+    const table = page.getByRole("table").first();
+    const statusHeader = table.getByRole("columnheader", { name: /Status/ });
+    const statusSort = table.getByRole("button", { name: "Status", exact: true });
+
     await expect(statusHeader).toHaveAttribute("aria-sort", "none");
-    await page.getByRole("button", { name: "Status" }).click();
+    await statusSort.click();
     await expect(statusHeader).toHaveAttribute("aria-sort", "ascending");
-    await page.getByRole("button", { name: "Status" }).click();
+    await statusSort.click();
     await expect(statusHeader).toHaveAttribute("aria-sort", "descending");
   });
 

@@ -179,15 +179,27 @@ jobs:
       - name: End-to-end (Playwright)
         run: |
           set -o pipefail
-          npm run test:e2e -- --reporter=list,html 2>&1 | tee /tmp/playwright.txt
+          # The config owns the reporters: list, an HTML report at the repository root and (in CI) a
+          # JSON report the failure summary script reads.
+          npm run test:e2e 2>&1 | tee /tmp/playwright.txt
       - name: Report end-to-end failures
         if: failure()
         run: |
-          if [ -f /tmp/playwright.json ]; then node scripts/report-e2e-failures.mjs /tmp/playwright.json; fi
-          sed -e 's/\x1b\[[0-9;]*m//g' -e 's/%/%25/g' -e 's/\r//g' /tmp/playwright.txt \
-            | awk '/^  [0-9]+\) /{flag=1} flag || /^Running [0-9]+ tests?/{print}' \
-            | head -45 \
-            | while IFS= read -r line; do echo "::error::${line:0:900}"; done
+          if [ -f /tmp/playwright.json ]; then node scripts/report-e2e-failures.mjs /tmp/playwright.json || true; fi
+          if [ -f /tmp/playwright.txt ]; then
+            sed -e 's/\x1b\[[0-9;]*m//g' -e 's/%/%25/g' -e 's/\r//g' /tmp/playwright.txt | tee playwright-output.txt > /dev/null
+            {
+              echo "### Playwright output"
+              echo '```text'
+              grep -E -A 10 '^ *[0-9]+\) ' playwright-output.txt | head -60 || true
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            grep -E -A 10 '^ *[0-9]+\) ' playwright-output.txt | head -40 \
+              | while IFS= read -r line; do echo "::error::${line:0:900}"; done || true
+            tail -12 playwright-output.txt | while IFS= read -r line; do echo "::warning::${line:0:900}"; done || true
+          else
+            echo "::error::Playwright produced no output"
+          fi
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: failure()
         with:
@@ -195,6 +207,7 @@ jobs:
           path: |
             playwright-report/
             test-results/
+            playwright-output.txt
 
   codeql:
     name: Code scanning (CodeQL)
